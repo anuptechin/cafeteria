@@ -3,6 +3,6 @@ dist/
 .env
 .env.local
 *.log
-server/faces/
+
 web/dist/
 .DS_Store
