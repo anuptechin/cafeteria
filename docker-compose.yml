@@ -1,0 +1,65 @@
+# D'Decor Cafeteria Management — full stack in Docker.
+#   db  : Postgres 18 (data persisted in a named volume)
+#   api : Express + tsx (schema + seed on first boot, super admin auto-seeded)
+#   web : Vite build served by nginx, proxies /api + /faces to the API
+#
+# Quick start:  docker compose up --build
+#   Web   -> http://localhost:8080
+#   API   -> http://localhost:4000
+#   Login -> ambuj.kumar@ddecor.com / Admin@123$  (override via env below)
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: canteen
+      POSTGRES_PASSWORD: canteen
+      POSTGRES_DB: canteen
+    volumes:
+      - pgdata:/var/lib/postgresql   # postgres:18+ stores data in a versioned subdir here
+    ports:
+      - "5434:5432"            # host 5434 -> optional psql/SSMS access; the API uses the internal network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canteen -d canteen"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://canteen:canteen@db:5432/canteen
+      PORT: "4000"
+      APP_TZ: Asia/Kolkata
+      FACES_DIR: ./server/faces
+      SIMULATE: "true"          # live punches so the dashboard/display feel alive
+      # --- security: override these in production ---
+      JWT_SECRET: ${JWT_SECRET:-change-me-please-use-a-long-random-string}
+      SUPER_ADMIN_USER: ${SUPER_ADMIN_USER:-ambuj.kumar@ddecor.com}
+      SUPER_ADMIN_NAME: ${SUPER_ADMIN_NAME:-Ambuj Kumar}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-Admin@123$$}   # $$ -> literal $
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - faces:/app/server/faces
+    ports:
+      - "4000:4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
+  faces:
