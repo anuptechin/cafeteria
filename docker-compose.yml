@@ -3,25 +3,28 @@
 #   api : Express + tsx (schema + seed on first boot, super admin auto-seeded)
 #   web : Vite build served by nginx, proxies /api + /faces to the API
 #
-# Quick start:  docker compose up --build
+# Quick start:  cp .env.example .env  (fill in secrets)  &&  docker compose up --build
 #   Web   -> http://localhost:8080
 #   API   -> http://localhost:4000
-#   Login -> ambuj.kumar@ddecor.com / Admin@123$  (override via env below)
+#   Login -> SUPER_ADMIN_USER / SUPER_ADMIN_PASSWORD  (from .env)
+# All credentials live in .env (gitignored); the stack won't start without it.
 
 services:
   db:
     image: postgres:18-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: canteen
-      POSTGRES_PASSWORD: canteen
-      POSTGRES_DB: canteen
+      POSTGRES_USER: ${PGUSER:?set PGUSER in .env}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?set PGPASSWORD in .env}
+      POSTGRES_DB: ${PGDATABASE:?set PGDATABASE in .env}
     volumes:
       - pgdata:/var/lib/postgresql   # postgres:18+ stores data in a versioned subdir here
-    ports:
-      - "5434:5432"            # host 5434 -> optional psql/SSMS access; the API uses the internal network
+    # No host port published -> Postgres is reachable only on the internal Docker
+    # network. Uncomment for local psql/SSMS access if you really need it.
+    # ports:
+    #   - "5434:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U canteen -d canteen"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -31,17 +34,18 @@ services:
       context: .
       dockerfile: server/Dockerfile
     restart: unless-stopped
+    # All values come from .env (gitignored). Critical secrets are required (:?)
+    # so the stack refuses to start with insecure defaults.
     environment:
-      DATABASE_URL: postgres://canteen:canteen@db:5432/canteen
-      PORT: "4000"
-      APP_TZ: Asia/Kolkata
-      FACES_DIR: ./server/faces
-      SIMULATE: "true"          # live punches so the dashboard/display feel alive
-      # --- security: override these in production ---
-      JWT_SECRET: ${JWT_SECRET:-change-me-please-use-a-long-random-string}
-      SUPER_ADMIN_USER: ${SUPER_ADMIN_USER:-ambuj.kumar@ddecor.com}
-      SUPER_ADMIN_NAME: ${SUPER_ADMIN_NAME:-Ambuj Kumar}
-      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-Admin@123$$}   # $$ -> literal $
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?set COMPOSE_DATABASE_URL in .env}
+      PORT: ${PORT:-4000}
+      APP_TZ: ${APP_TZ:-Asia/Kolkata}
+      FACES_DIR: ${FACES_DIR:-./server/faces}
+      SIMULATE: ${SIMULATE:-true}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      SUPER_ADMIN_USER: ${SUPER_ADMIN_USER:?set SUPER_ADMIN_USER in .env}
+      SUPER_ADMIN_NAME: ${SUPER_ADMIN_NAME:-Admin}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:?set SUPER_ADMIN_PASSWORD in .env}
     depends_on:
       db:
         condition: service_healthy
