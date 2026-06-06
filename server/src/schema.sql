@@ -23,14 +23,45 @@ CREATE TABLE IF NOT EXISTS employees (
 );
 
 -- Raw scan/punch events.
+--   punched_at  : authoritative event instant (timestamptz).
+--   punch_date / punch_time : that instant split into local (Asia/Kolkata) date
+--     and time of day, maintained by trigger — convenient for grouping/filtering
+--     reports by calendar day or meal time without re-deriving the conversion.
 CREATE TABLE IF NOT EXISTS punches (
   id          BIGSERIAL   PRIMARY KEY,
   emp_id      TEXT        NOT NULL REFERENCES employees(emp_id),
   std_id      INTEGER     NOT NULL REFERENCES devices(std_id),
-  punched_at  TIMESTAMPTZ NOT NULL
+  punched_at  TIMESTAMPTZ NOT NULL,
+  punch_date  DATE,
+  punch_time  TIME
 );
 
+-- Idempotent for existing databases (CREATE TABLE IF NOT EXISTS skips columns).
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_date DATE;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_time TIME;
+
+-- Derive punch_date/punch_time from punched_at in the app timezone. A trigger is
+-- used rather than GENERATED columns because AT TIME ZONE is STABLE, not IMMUTABLE.
+CREATE OR REPLACE FUNCTION punches_set_local_datetime() RETURNS trigger AS $$
+BEGIN
+  NEW.punch_date := (NEW.punched_at AT TIME ZONE 'Asia/Kolkata')::date;
+  NEW.punch_time := (NEW.punched_at AT TIME ZONE 'Asia/Kolkata')::time;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_punches_local_datetime
+  BEFORE INSERT OR UPDATE OF punched_at ON punches
+  FOR EACH ROW EXECUTE FUNCTION punches_set_local_datetime();
+
+-- Backfill any rows that predate the columns/trigger.
+UPDATE punches
+   SET punch_date = (punched_at AT TIME ZONE 'Asia/Kolkata')::date,
+       punch_time = (punched_at AT TIME ZONE 'Asia/Kolkata')::time
+ WHERE punch_date IS NULL OR punch_time IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_punches_punched_at ON punches (punched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_punches_punch_date ON punches (punch_date);
 CREATE INDEX IF NOT EXISTS idx_punches_emp        ON punches (emp_id);
 CREATE INDEX IF NOT EXISTS idx_punches_std        ON punches (std_id);
 CREATE INDEX IF NOT EXISTS idx_punches_std_time   ON punches (std_id, punched_at DESC);
