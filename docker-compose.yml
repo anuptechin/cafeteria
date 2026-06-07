@@ -19,10 +19,11 @@ services:
       POSTGRES_DB: ${PGDATABASE:?set PGDATABASE in .env}
     volumes:
       - pgdata:/var/lib/postgresql   # postgres:18+ stores data in a versioned subdir here
-    # No host port published -> Postgres is reachable only on the internal Docker
-    # network. Uncomment for local psql/SSMS access if you really need it.
-    # ports:
-    #   - "5434:5432"
+    # Postgres is published on host port 5434 because the punch-ingestion source
+    # writes directly to the DB over the VLAN. Lock this down at the network layer:
+    # the VLAN firewall must allow ONLY the ingestion source's IP -> <host>:5434.
+    ports:
+      - "5434:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
