@@ -83,6 +83,31 @@ CREATE OR REPLACE TRIGGER trg_punches_local_datetime
   BEFORE INSERT OR UPDATE OF punched_at ON punches
   FOR EACH ROW EXECUTE FUNCTION punches_set_local_datetime();
 
+-- Idempotent ingestion. The external push (HikCentral "Database Synchronization"
+-- with "Auto Push Failed Record" on) re-sends already-synced rows; without this
+-- each repeat would raise a duplicate-key error on uq_punch, which HikCentral
+-- treats as a failure and retries forever. Skip a scan we already hold (same
+-- emp_id + device_id + punched_at) silently — the INSERT succeeds with 0 rows so
+-- the pusher sees success. uq_punch remains the hard backstop. This trigger name
+-- sorts before trg_punches_local_datetime, so it runs first and short-circuits.
+CREATE OR REPLACE FUNCTION punches_skip_duplicate() RETURNS trigger AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM punches
+     WHERE emp_id    IS NOT DISTINCT FROM NEW.emp_id
+       AND device_id IS NOT DISTINCT FROM NEW.device_id
+       AND punched_at = NEW.punched_at
+  ) THEN
+    RETURN NULL;          -- already recorded this scan; skip silently
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_punches_dedup
+  BEFORE INSERT ON punches
+  FOR EACH ROW EXECUTE FUNCTION punches_skip_duplicate();
+
 -- Backfill any rows that predate the columns/trigger.
 UPDATE punches
    SET punch_date = (punched_at AT TIME ZONE 'Asia/Kolkata')::date,
