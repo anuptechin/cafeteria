@@ -7,9 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "db:setup": "tsx src/setup.ts",
-    "seed": "tsx src/seed.ts",
-    "import": "tsx src/import-master.ts",
-    "photos": "tsx src/gen-photos.ts"
+    "db:import-emp": "tsx src/import-emp-data.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

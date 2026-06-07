@@ -1,6 +1,6 @@
 # D'Decor Cafeteria Management — full stack in Docker.
 #   db  : Postgres 18 (data persisted in a named volume)
-#   api : Express + tsx (schema + seed on first boot, super admin auto-seeded)
+#   api : Express + tsx (schema applied on first boot, super admin auto-seeded)
 #   web : Vite build served by nginx, proxies /api + /faces to the API
 #
 # Quick start:  cp .env.example .env  (fill in secrets)  &&  docker compose up --build
@@ -40,8 +40,6 @@ services:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:?set COMPOSE_DATABASE_URL in .env}
       PORT: ${PORT:-4000}
       APP_TZ: ${APP_TZ:-Asia/Kolkata}
-      FACES_DIR: ${FACES_DIR:-./server/faces}
-      SIMULATE: ${SIMULATE:-true}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       SUPER_ADMIN_USER: ${SUPER_ADMIN_USER:?set SUPER_ADMIN_USER in .env}
       SUPER_ADMIN_NAME: ${SUPER_ADMIN_NAME:-Admin}
@@ -49,8 +47,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - faces:/app/server/faces
     ports:
       - "4000:4000"
 
@@ -66,4 +62,3 @@ services:
 
 volumes:
   pgdata:
-  faces:

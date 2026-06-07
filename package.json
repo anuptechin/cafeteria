@@ -9,10 +9,6 @@
   ],
   "scripts": {
     "db:setup": "npm -w server run db:setup",
-    "seed": "npm -w server run seed",
-    "import": "npm -w server run import",
-    "photos": "npm -w server run photos",
-    "reset": "npm -w server run db:setup && npm -w server run seed",
     "dev:api": "npm -w server run dev",
     "dev:web": "npm -w web run dev",
     "dev": "concurrently -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",

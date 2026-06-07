@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, usePoll, type RangeState } from "../lib/api";
-import { Card, RangePicker, Avatar, CardSkeleton, Empty, Pill } from "../components/ui";
+import { Card, RangePicker, Avatar, CardSkeleton, Empty } from "../components/ui";
 import { count, dateOf, timeOf } from "../lib/format";
 
-type Tab = "cafeteria" | "employees" | "lookup";
+type Tab = "device" | "employees" | "lookup";
 
 function downloadCSV(filename: string, rows: (string | number)[][]) {
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -16,7 +16,7 @@ function downloadCSV(filename: string, rows: (string | number)[][]) {
 }
 
 export function Reports() {
-  const [tab, setTab] = useState<Tab>("cafeteria");
+  const [tab, setTab] = useState<Tab>("device");
   const [range, setRange] = useState<RangeState>({ key: "60d", from: "", to: "" });
 
   return (
@@ -30,7 +30,7 @@ export function Reports() {
       </header>
 
       <div className="inline-flex rounded-full border bg-surface-white p-0.5">
-        {([["cafeteria", "Cafeteria-wise"], ["employees", "By Employee"], ["lookup", "Employee Lookup"]] as [Tab, string][]).map(([k, l]) => (
+        {([["device", "Device-wise"], ["employees", "By Employee"], ["lookup", "Employee Lookup"]] as [Tab, string][]).map(([k, l]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
@@ -43,26 +43,26 @@ export function Reports() {
         ))}
       </div>
 
-      {tab === "cafeteria" && <CafeteriaReport range={range} onCSV={downloadCSV} />}
+      {tab === "device" && <DeviceReport range={range} onCSV={downloadCSV} />}
       {tab === "employees" && <EmployeesReport range={range} onCSV={downloadCSV} />}
       {tab === "lookup" && <EmployeeLookup range={range} />}
     </div>
   );
 }
 
-function CafeteriaReport({ range, onCSV }: { range: RangeState; onCSV: typeof downloadCSV }) {
-  const { data } = usePoll(() => api.cafeteriaReport(range), [range], 0);
+function DeviceReport({ range, onCSV }: { range: RangeState; onCSV: typeof downloadCSV }) {
+  const { data } = usePoll(() => api.deviceReport(range), [range], 0);
   if (!data) return <CardSkeleton h={300} />;
   return (
     <Card
-      title="Cafeteria-wise Meals"
+      title="Device-wise Meals"
       action={
         <button
           onClick={() =>
-            onCSV(`cafeteria_${range.key}.csv`, [
-              ["Cafeteria", "Location", "Meals"],
-              ...data.rows.map((r: any) => [r.cafeteria_name, r.location, r.meals]),
-              ["TOTAL", "", data.totalMeals],
+            onCSV(`device_${range.key}.csv`, [
+              ["Device", "Meals"],
+              ...data.rows.map((r: any) => [r.device_id, r.meals]),
+              ["TOTAL", data.totalMeals],
             ])
           }
           className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
@@ -73,27 +73,25 @@ function CafeteriaReport({ range, onCSV }: { range: RangeState; onCSV: typeof do
     >
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Kpi label="Total Meals" value={count(data.totalMeals)} />
-        <Kpi label="Cafeterias" value={count(data.rows.length)} />
-        <Kpi label="Busiest" value={data.rows[0]?.cafeteria_name ?? "—"} small />
+        <Kpi label="Devices" value={count(data.rows.length)} />
+        <Kpi label="Busiest" value={data.rows[0]?.device_id ?? "—"} small />
       </div>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
-            <th className="py-2 font-medium">Cafeteria</th>
-            <th className="py-2 font-medium">Location</th>
+            <th className="py-2 font-medium">Device</th>
             <th className="py-2 text-right font-medium">Meals</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map((r: any) => (
-            <tr key={r.std_id} className="border-b border-black/5 hover:bg-black/[0.02]">
-              <td className="py-2.5 font-medium">{r.cafeteria_name}</td>
-              <td className="py-2.5"><Pill>{r.location}</Pill></td>
+            <tr key={r.device_id} className="border-b border-black/5 hover:bg-black/[0.02]">
+              <td className="py-2.5 font-medium">{r.device_id}</td>
               <td className="py-2.5 text-right tnum font-semibold">{count(r.meals)}</td>
             </tr>
           ))}
           <tr className="font-semibold">
-            <td className="py-3" colSpan={2}>Total</td>
+            <td className="py-3">Total</td>
             <td className="py-3 text-right tnum">{count(data.totalMeals)}</td>
           </tr>
         </tbody>
@@ -121,9 +119,9 @@ function EmployeesReport({ range, onCSV }: { range: RangeState; onCSV: typeof do
         <button
           onClick={() =>
             onCSV(`employee_meals_${range.key}.csv`, [
-              ["Emp ID", "Name", "Department", "Meals"],
-              ...data.rows.map((r: any) => [r.emp_id, r.name, r.department, r.meals]),
-              ["", "", "TOTAL", data.totalMeals],
+              ["Emp ID", "Name", "Meals"],
+              ...data.rows.map((r: any) => [r.emp_id, r.name, r.meals]),
+              ["", "TOTAL", data.totalMeals],
             ])
           }
           className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
@@ -148,7 +146,6 @@ function EmployeesReport({ range, onCSV }: { range: RangeState; onCSV: typeof do
           <thead className="sticky top-0 bg-surface-white">
             <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
               <th className="py-2 font-medium">Employee</th>
-              <th className="py-2 font-medium">Dept</th>
               <th className="py-2 text-right font-medium">Meals</th>
             </tr>
           </thead>
@@ -157,14 +154,13 @@ function EmployeesReport({ range, onCSV }: { range: RangeState; onCSV: typeof do
               <tr key={r.emp_id} className="border-b border-black/5 hover:bg-black/[0.02]">
                 <td className="py-2">
                   <div className="flex items-center gap-2.5">
-                    <Avatar empId={r.emp_id} name={r.name} size={30} />
+                    <Avatar empId={r.emp_id} name={r.name} imageUrl={r.image_id ? `/faces/${r.image_id}` : undefined} size={30} />
                     <div>
                       <div className="font-medium">{r.name}</div>
                       <div className="tnum text-xs text-ink-secondary">{r.emp_id}</div>
                     </div>
                   </div>
                 </td>
-                <td className="py-2 text-ink-secondary">{r.department}</td>
                 <td className="py-2 text-right tnum font-medium">{count(r.meals)}</td>
               </tr>
             ))}
@@ -231,10 +227,10 @@ function EmployeeLookup({ range }: { range: RangeState }) {
                   onClick={() => choose(r)}
                   className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-black/5"
                 >
-                  <Avatar empId={r.emp_id} name={r.name} size={30} />
+                  <Avatar empId={r.emp_id} name={r.name} imageUrl={r.image_id ? `/faces/${r.image_id}` : undefined} size={30} />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{r.name}</div>
-                    <div className="tnum truncate text-xs text-ink-secondary">{r.emp_id} · {r.department}</div>
+                    <div className="tnum truncate text-xs text-ink-secondary">{r.emp_id}</div>
                   </div>
                   <span className="ml-auto shrink-0 tnum text-xs text-ink-secondary">{count(r.meals)} meals</span>
                 </button>
@@ -249,11 +245,11 @@ function EmployeeLookup({ range }: { range: RangeState }) {
       {data && (
         <Card>
           <div className="mb-5 flex items-center gap-4">
-            <Avatar empId={data.emp.emp_id} name={data.emp.name} size={56} />
+            <Avatar empId={data.emp.emp_id} name={data.emp.name} imageUrl={data.emp.image_id ? `/faces/${data.emp.image_id}` : undefined} size={56} />
             <div>
               <div className="text-xl font-bold">{data.emp.name}</div>
               <div className="text-sm text-ink-secondary">
-                <span className="tnum">{data.emp.emp_id}</span> · {data.emp.department}
+                <span className="tnum">{data.emp.emp_id}</span>
               </div>
             </div>
             <div className="ml-auto text-right">
@@ -267,7 +263,7 @@ function EmployeeLookup({ range }: { range: RangeState }) {
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
                   <th className="py-2 font-medium">Date</th>
                   <th className="py-2 font-medium">Time</th>
-                  <th className="py-2 font-medium">Cafeteria</th>
+                  <th className="py-2 font-medium">Device</th>
                 </tr>
               </thead>
               <tbody>
@@ -275,7 +271,7 @@ function EmployeeLookup({ range }: { range: RangeState }) {
                   <tr key={p.id} className="border-b border-black/5">
                     <td className="py-2">{dateOf(p.punched_at)}</td>
                     <td className="py-2 tnum">{timeOf(p.punched_at)}</td>
-                    <td className="py-2">{p.cafeteria_name}</td>
+                    <td className="py-2">{p.device_id ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>

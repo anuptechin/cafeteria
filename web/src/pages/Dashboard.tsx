@@ -49,7 +49,7 @@ export function Dashboard() {
             <Stat label="Meals Served" value={count(data.totals.meals)} sub="in selected period" accent="#000000" />
             <Stat label="Today's Meals" value={count(data.today.meals)} sub={`${count(data.today.employees)} employees so far`} accent="#19B924" />
             <Stat label="Employees Fed" value={count(data.uniqueEmployees)} sub="unique, this period" accent="#B99919" />
-            <Stat label="Avg / Day" value={count(data.avgPerDay)} sub={`${data.activeCafeterias} cafeterias active`} accent="#B93E19" />
+            <Stat label="Avg / Day" value={count(data.avgPerDay)} sub={`${data.activeDevices} devices active`} accent="#B93E19" />
           </>
         ) : null}
       </div>
@@ -68,25 +68,25 @@ export function Dashboard() {
           )}
         </Card>
 
-        <Card title="Cafeteria Share">
+        <Card title="Device Share">
           {data ? (
             <div className="flex flex-col items-center gap-4">
               <Donut
                 size={176}
                 centerLabel={count(data.totals.meals)}
                 centerSub="total meals"
-                segments={data.cafeterias.map((c, i) => ({
+                segments={data.devices.map((c, i) => ({
                   value: c.meals,
                   color: CAFE_COLORS[i % CAFE_COLORS.length],
-                  label: c.cafeteria_name,
+                  label: c.device_id,
                 }))}
               />
               <div className="grid w-full grid-cols-1 gap-1.5">
-                {data.cafeterias.map((c, i) => (
-                  <div key={c.std_id} className="flex items-center justify-between text-sm">
+                {data.devices.map((c, i) => (
+                  <div key={c.device_id} className="flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full" style={{ background: CAFE_COLORS[i % CAFE_COLORS.length] }} />
-                      {c.cafeteria_name}
+                      {c.device_id}
                     </span>
                     <span className="tnum font-semibold">{count(c.meals)}</span>
                   </div>
@@ -99,11 +99,11 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Cafeterias + slots */}
+      {/* Devices + slots */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="Meals by Cafeteria">
+        <Card title="Meals by Device">
           {data ? (
-            <BarList items={data.cafeterias.map((c) => ({ label: c.cafeteria_name, sub: c.location, value: c.meals }))} />
+            <BarList items={data.devices.map((c) => ({ label: c.device_id, value: c.meals }))} />
           ) : (
             <CardSkeleton h={200} />
           )}
@@ -135,8 +135,7 @@ export function Dashboard() {
               <thead>
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
                   <th className="py-2 font-medium">Employee</th>
-                  <th className="py-2 font-medium">Department</th>
-                  <th className="py-2 font-medium">Cafeteria</th>
+                  <th className="py-2 font-medium">Device</th>
                   <th className="py-2 text-right font-medium">Time</th>
                 </tr>
               </thead>
@@ -145,15 +144,14 @@ export function Dashboard() {
                   <tr key={f.id} className={`border-b border-black/5 last:border-0 hover:bg-black/[0.02] ${i === 0 ? "animate-fade-up" : ""}`}>
                     <td className="py-2.5">
                       <div className="flex items-center gap-3">
-                        <Avatar empId={f.emp_id} name={f.name} size={34} ring={i === 0 ? "#19B924" : undefined} />
+                        <Avatar empId={f.emp_id} name={f.name} imageUrl={f.has_image ? `/faces/${f.id}` : undefined} size={34} ring={i === 0 ? "#19B924" : undefined} />
                         <div>
-                          <div className="font-medium">{f.name}</div>
-                          <div className="tnum text-xs text-ink-secondary">{f.emp_id}</div>
+                          <div className="font-medium">{f.name ?? "Unknown"}</div>
+                          <div className="tnum text-xs text-ink-secondary">{f.emp_id ?? "—"}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="py-2.5 text-ink-secondary">{f.department}</td>
-                    <td className="py-2.5">{f.cafeteria_name}</td>
+                    <td className="py-2.5">{f.device_id ?? "—"}</td>
                     <td className="py-2.5 text-right tnum text-ink-secondary">{timeOf(f.punched_at)}</td>
                   </tr>
                 ))}
@@ -183,11 +181,11 @@ function LiveTicker({ feed }: { feed: Face[] }) {
               i === 0 ? "animate-pop-in" : ""
             }`}
           >
-            <Avatar empId={f.emp_id} name={f.name} size={26} ring={i === 0 ? "#19B924" : undefined} />
+            <Avatar empId={f.emp_id} name={f.name} imageUrl={f.has_image ? `/faces/${f.id}` : undefined} size={26} ring={i === 0 ? "#19B924" : undefined} />
             <div className="leading-tight">
-              <div className="text-xs font-medium">{shortName(f.name)}</div>
+              <div className="text-xs font-medium">{shortName(f.name ?? "Unknown")}</div>
               <div className="text-[10px] text-ink-secondary">
-                {f.cafeteria_name} · {timeOf(f.punched_at)}
+                {(f.device_id ?? "—")} · {timeOf(f.punched_at)}
               </div>
             </div>
           </div>

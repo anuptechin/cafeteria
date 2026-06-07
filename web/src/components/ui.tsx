@@ -188,11 +188,13 @@ export function RangePicker({
 export function Avatar({
   empId,
   name,
+  imageUrl,
   size = 40,
   ring,
 }: {
-  empId: string;
-  name: string;
+  empId: string | null;
+  name: string | null;
+  imageUrl?: string | null;
   size?: number;
   ring?: string;
 }) {
@@ -201,7 +203,7 @@ export function Avatar({
       className="relative shrink-0 overflow-hidden rounded-full"
       style={{ width: size, height: size, boxShadow: ring ? `0 0 0 2px ${ring}` : undefined }}
     >
-      <FaceFill empId={empId} name={name} fontSize={Math.round(size * 0.38)} />
+      <FaceFill empId={empId} name={name} imageUrl={imageUrl} fontSize={Math.round(size * 0.38)} />
     </div>
   );
 }

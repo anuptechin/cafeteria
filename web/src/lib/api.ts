@@ -4,22 +4,22 @@ export type DashboardData = {
   range: string;
   totals: { meals: number };
   uniqueEmployees: number;
-  activeCafeterias: number;
+  activeDevices: number;
   avgPerDay: number;
   today: { meals: number; employees: number };
   trend: { d: string; meals: number }[];
-  cafeterias: { std_id: number; cafeteria_name: string; location: string; meals: number }[];
-  topEmployees: { emp_id: string; name: string; department: string; meals: number; last_seen: string | null }[];
+  devices: { device_id: string; meals: number }[];
+  topEmployees: { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null }[];
   slots: { name: string; meals: number }[];
   hourly: { hour: number; meals: number }[];
 };
 
 export type Face = {
   id: number;
-  emp_id: string;
-  name: string;
-  department: string;
-  cafeteria_name: string;
+  emp_id: string | null;
+  name: string | null;
+  has_image: boolean;
+  device_id: string | null;
   punched_at: string;
 };
 
@@ -124,16 +124,10 @@ export const api = {
   recentFaces: (limit = 10) => getJSON<Face[]>(`/api/recent-faces?limit=${limit}`),
   employees: (r: RangeState, search = "") =>
     getJSON<any[]>(`/api/employees?${rq(r)}&search=${encodeURIComponent(search)}&limit=120`),
-  cafeteriaReport: (r: RangeState) => getJSON<any>(`/api/reports/cafeteria?${rq(r)}`),
+  deviceReport: (r: RangeState) => getJSON<any>(`/api/reports/device?${rq(r)}`),
   employeesReport: (r: RangeState) => getJSON<any>(`/api/reports/employees?${rq(r)}`),
   employeeReport: (empId: string, r: RangeState) =>
     getJSON<any>(`/api/reports/employee/${empId}?${rq(r)}`),
-  config: () => getJSON<any>(`/api/config`),
-  updateDevice: (stdId: number, body: any) => sendJSON(`/api/config/device/${stdId}`, "PUT", body),
-  punch: (emp_id?: string, std_id?: number) => sendJSON(`/api/simulate/punch`, "POST", { emp_id, std_id }),
-  burst: (count: number) => sendJSON(`/api/simulate/burst`, "POST", { count }),
-  setAuto: (on: boolean) => sendJSON(`/api/simulate/auto`, "POST", { on }),
-  getAuto: () => getJSON<{ auto: boolean }>(`/api/simulate/auto`),
 
   // ---- auth ----
   login: (username: string, password: string) =>

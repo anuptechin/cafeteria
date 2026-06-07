@@ -24,9 +24,4 @@ export const env = {
   superAdminUser: process.env.SUPER_ADMIN_USER ?? "ambuj.kumar@ddecor.com",
   superAdminName: process.env.SUPER_ADMIN_NAME ?? "Ambuj Kumar",
   superAdminPassword: process.env.SUPER_ADMIN_PASSWORD ?? "Admin@123$",
-  facesDir: path.resolve(
-    __dirname,
-    "../..",
-    (process.env.FACES_DIR ?? "./server/faces").replace(/^\.\//, "")
-  ),
 };

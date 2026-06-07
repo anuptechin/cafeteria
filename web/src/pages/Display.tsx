@@ -85,19 +85,26 @@ function Channel({ face, flashing, newest }: { face: Face | null; flashing: bool
 
       {/* name HUD */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/80 to-transparent px-3 pb-2.5 pt-8">
-        <div className="text-lg font-bold leading-tight line-clamp-2" title={face.name}>{face.name}</div>
+        <div className="text-lg font-bold leading-tight line-clamp-2" title={face.name ?? ""}>{face.name ?? "Unknown"}</div>
         <div className="mt-1 flex items-center justify-between text-xs text-white/65" style={{ fontFamily: mono }}>
-          <span className="truncate">{face.emp_id}</span>
+          <span className="truncate">{face.emp_id ?? "—"}</span>
           <span className="shrink-0">{t}</span>
         </div>
-        <div className="mt-0.5 truncate text-[11px] font-medium uppercase tracking-wider text-success">{face.cafeteria_name}</div>
+        <div className="mt-0.5 truncate text-[11px] font-medium uppercase tracking-wider text-success">{face.device_id ?? "—"}</div>
       </div>
     </div>
   );
 }
 
 function FaceImg({ face }: { face: Face }) {
-  return <FaceFill empId={face.emp_id} name={face.name} fontSize="clamp(2.2rem, 7vw, 5.5rem)" />;
+  return (
+    <FaceFill
+      empId={face.emp_id}
+      name={face.name}
+      imageUrl={face.has_image ? `/faces/${face.id}` : null}
+      fontSize="clamp(2.2rem, 7vw, 5.5rem)"
+    />
+  );
 }
 
 // CRT scanline + flicker overlay across the whole wall.

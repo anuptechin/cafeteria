@@ -1,44 +1,73 @@
 -- ============================================================
 --  Canteen Management — schema
---  Mirrors the real Hikvision-backed source:
---    punches(emp_id, std_id, timeline)  +  emp_id->name map  +  image folder
+--  Mirrors the real Hikvision punch export as ONE flat table:
+--    punches(emp_id, person_name, first/last, date/time, device_id, image)
+--  plus meal_slots, users/audit (RBAC) and a derived employees view.
 -- ============================================================
 
--- Device / cafeteria mapping. std_id is the raw Face Reader device id;
--- cafeteria_name is the editable friendly mapping (e.g. "F6 Cafeteria A").
-CREATE TABLE IF NOT EXISTS devices (
-  std_id          INTEGER PRIMARY KEY,
-  device_label    TEXT    NOT NULL,
-  cafeteria_name  TEXT    NOT NULL,
-  location        TEXT,                     -- F6 / G15 / F7
-  active          BOOLEAN NOT NULL DEFAULT TRUE
-);
-
--- emp_id is the fixed-digit code that is also embedded in the face image filename.
-CREATE TABLE IF NOT EXISTS employees (
-  emp_id      TEXT    PRIMARY KEY,
-  name        TEXT    NOT NULL,
-  department  TEXT,
-  active      BOOLEAN NOT NULL DEFAULT TRUE
-);
-
--- Raw scan/punch events.
---   punched_at  : authoritative event instant (timestamptz).
+-- Single, denormalized scan/punch table. Mirrors the Hikvision punch/access-event
+-- export — every meal (face scan) is one row, with the person + device captured
+-- inline. Rows are inserted externally (Hikvision / ingestion); the app reads only.
+--   punched_at  : authoritative event instant ("Date and Time", timestamptz).
 --   punch_date / punch_time : that instant split into local (Asia/Kolkata) date
 --     and time of day, maintained by trigger — convenient for grouping/filtering
 --     reports by calendar day or meal time without re-deriving the conversion.
+--   image       : "Images" — raw face-image bytes (JPEG/PNG) synced inline.
 CREATE TABLE IF NOT EXISTS punches (
   id          BIGSERIAL   PRIMARY KEY,
-  emp_id      TEXT        NOT NULL REFERENCES employees(emp_id),
-  std_id      INTEGER     NOT NULL REFERENCES devices(std_id),
-  punched_at  TIMESTAMPTZ NOT NULL,
-  punch_date  DATE,
-  punch_time  TIME
+  emp_id      TEXT,                         -- Employee ID
+  person_name TEXT,                         -- Person Name
+  first_name  TEXT,                         -- First Name
+  last_name   TEXT,                         -- Last Name
+  punched_at  TIMESTAMPTZ NOT NULL,         -- Date and Time
+  punch_date  DATE,                         -- Date
+  punch_time  TIME,                         -- Time
+  device_id   TEXT,                         -- Device ID
+  image       BYTEA                         -- Images (raw image bytes)
 );
 
 -- Idempotent for existing databases (CREATE TABLE IF NOT EXISTS skips columns).
-ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_date DATE;
-ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_time TIME;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS person_name TEXT;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS first_name  TEXT;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS last_name   TEXT;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_date  DATE;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_time  TIME;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS device_id   TEXT;
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS image       BYTEA;
+-- If an older run created `image` as TEXT, migrate it to BYTEA (raw image bytes).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'punches'
+       AND column_name = 'image' AND data_type <> 'bytea'
+  ) THEN
+    EXECUTE 'ALTER TABLE punches ALTER COLUMN image TYPE bytea USING image::bytea';
+  END IF;
+END $$;
+
+-- ---- Heal databases created under the old 3-table model ----------------------
+-- Old shape: punches → employees(emp_id) + devices(std_id), with emp_id/std_id
+-- NOT NULL FKs. Now everything is inline on punches. These steps are idempotent
+-- and no-ops on a fresh database.
+-- Drop the old `employees` ONLY if it is a real table (a prior run may have already
+-- replaced it with the view below — in which case CREATE OR REPLACE VIEW handles it).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'employees' AND table_type = 'BASE TABLE'
+  ) THEN
+    EXECUTE 'DROP TABLE employees CASCADE';   -- also drops the old FK on punches.emp_id
+  END IF;
+END $$;
+DROP TABLE IF EXISTS devices CASCADE;          -- also drops the old FK on punches.std_id
+-- Old per-event linkage columns/indexes are gone; the unique guard is rebuilt on device_id.
+ALTER TABLE punches DROP COLUMN IF EXISTS std_id;
+ALTER TABLE punches ALTER COLUMN emp_id DROP NOT NULL;
+DROP INDEX IF EXISTS idx_punches_std;
+DROP INDEX IF EXISTS idx_punches_std_time;
+DROP INDEX IF EXISTS uq_punch;                 -- recreated below over (emp_id, device_id, punched_at)
 
 -- Derive punch_date/punch_time from punched_at in the app timezone. A trigger is
 -- used rather than GENERATED columns because AT TIME ZONE is STABLE, not IMMUTABLE.
@@ -63,10 +92,35 @@ UPDATE punches
 CREATE INDEX IF NOT EXISTS idx_punches_punched_at ON punches (punched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_punches_punch_date ON punches (punch_date);
 CREATE INDEX IF NOT EXISTS idx_punches_emp        ON punches (emp_id);
-CREATE INDEX IF NOT EXISTS idx_punches_std        ON punches (std_id);
-CREATE INDEX IF NOT EXISTS idx_punches_std_time   ON punches (std_id, punched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_punches_device     ON punches (device_id);
+CREATE INDEX IF NOT EXISTS idx_punches_device_time ON punches (device_id, punched_at DESC);
 -- Guard against duplicate identical scans.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_punch ON punches (emp_id, std_id, punched_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_punch ON punches (emp_id, device_id, punched_at);
+
+-- Derived employee directory — a read-only roll-up of the punch table keyed by
+-- Employee ID (no separate employees master anymore).
+CREATE OR REPLACE VIEW employees AS
+SELECT emp_id,
+       max(person_name) AS name,
+       count(*)         AS meals,
+       max(punched_at)  AS last_seen
+  FROM punches
+ WHERE emp_id IS NOT NULL AND emp_id <> ''
+ GROUP BY emp_id;
+
+-- ------------------------------------------------------------------
+-- Employee master directory, imported from the Hikvision "Person
+-- Information" export (Emp_ID, Emp_Name, Department). This is the
+-- authoritative roster (every enrolled person), independent of whether
+-- they have punched — unlike the derived `employees` view above which
+-- only rolls up people seen in `punches`. Loaded by db:import-emp.
+CREATE TABLE IF NOT EXISTS emp_data (
+  emp_id     TEXT PRIMARY KEY,   -- "Emp_ID"     (column A)
+  emp_name   TEXT,               -- "Emp_Name"   (column B)
+  department TEXT                -- "Department" (column C)
+);
+
+CREATE INDEX IF NOT EXISTS idx_emp_data_department ON emp_data (department);
 
 -- Meal slots (used to label/filter punches: Breakfast / Lunch / Tea / Dinner).
 CREATE TABLE IF NOT EXISTS meal_slots (
@@ -76,6 +130,18 @@ CREATE TABLE IF NOT EXISTS meal_slots (
   end_time   TIME    NOT NULL,
   active     BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+-- Default slots, seeded once (replaces what the old seed script did). Idempotent:
+-- only inserts when the table is empty, so manual edits are never clobbered.
+INSERT INTO meal_slots (name, start_time, end_time)
+SELECT v.n, v.s::time, v.e::time
+  FROM (VALUES
+    ('Breakfast', '08:00', '10:00'),
+    ('Lunch',     '12:30', '15:00'),
+    ('Tea',       '16:00', '17:30'),
+    ('Dinner',    '19:30', '22:30')
+  ) AS v(n, s, e)
+ WHERE NOT EXISTS (SELECT 1 FROM meal_slots);
 
 -- ============================================================
 --  Auth & access control (RBAC)

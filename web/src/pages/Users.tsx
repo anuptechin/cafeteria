@@ -135,7 +135,7 @@ function CreateUser({ actorRole, onCreated }: { actorRole: Role; onCreated: () =
 
           <div className="rounded-xl border bg-surface-bege px-3.5 py-2.5 text-xs text-ink-secondary">
             {role === "manager"
-              ? "Managers can use the Live Display, Simulator and Reports only."
+              ? "Managers can use the Live Display and Reports only."
               : "Admins have full access except the audit log."}
           </div>
 

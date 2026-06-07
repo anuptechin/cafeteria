@@ -3,33 +3,26 @@ import { Dashboard } from "./pages/Dashboard";
 import { Display } from "./pages/Display";
 import { Reports } from "./pages/Reports";
 import { Employees } from "./pages/Employees";
-import { Admin } from "./pages/Admin";
-import { Simulator } from "./pages/Simulator";
 import { Audit } from "./pages/Audit";
 import { Users } from "./pages/Users";
 import { Login } from "./pages/Login";
 import { useLivePunches, ROLE_LABEL, type Role } from "./lib/api";
-import { PhotoProvider } from "./lib/photos";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ChangePassword } from "./components/ChangePassword";
 
 type Route =
   | "dashboard"
   | "display"
-  | "simulator"
   | "reports"
   | "employees"
-  | "admin"
   | "audit"
   | "users";
 
 const NAV: { key: Route; label: string; icon: JSX.Element; roles: Role[] }[] = [
   { key: "dashboard", label: "Dashboard", icon: <IconGrid />, roles: ["super_admin", "admin"] },
   { key: "display", label: "Live Display", icon: <IconScreen />, roles: ["super_admin", "admin", "manager"] },
-  { key: "simulator", label: "Simulator", icon: <IconBolt />, roles: ["super_admin", "admin", "manager"] },
   { key: "reports", label: "Reports", icon: <IconDoc />, roles: ["super_admin", "admin", "manager"] },
   { key: "employees", label: "Employees", icon: <IconUsers />, roles: ["super_admin", "admin"] },
-  { key: "admin", label: "Admin", icon: <IconGear />, roles: ["super_admin", "admin"] },
   { key: "users", label: "Users & Access", icon: <IconShieldUser />, roles: ["super_admin", "admin"] },
   { key: "audit", label: "Audit Log", icon: <IconHistory />, roles: ["super_admin"] },
 ];
@@ -74,11 +67,7 @@ function Gate() {
   const { user, ready } = useAuth();
   if (!ready) return <Splash />;
   if (!user) return <Login />;
-  return (
-    <PhotoProvider>
-      <AppShell />
-    </PhotoProvider>
-  );
+  return <AppShell />;
 }
 
 function Splash() {
@@ -111,10 +100,8 @@ function AppShell() {
       <main className="flex-1 overflow-x-hidden">
         <div className="mx-auto max-w-[1400px] px-6 py-6 lg:px-10">
           {route === "dashboard" && <Dashboard />}
-          {route === "simulator" && <Simulator goLive={() => nav("display")} />}
           {route === "reports" && <Reports />}
           {route === "employees" && <Employees />}
-          {route === "admin" && <Admin />}
           {route === "users" && <Users />}
           {route === "audit" && <Audit />}
         </div>
@@ -236,21 +223,6 @@ function IconUsers() {
       <circle cx="9" cy="8" r="3.2" />
       <path d="M3.5 20c0-3.6 2.7-5.5 5.5-5.5s5.5 1.9 5.5 5.5" />
       <path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 20c0-3-1.5-4.8-3.3-5.4" />
-    </svg>
-  );
-}
-function IconBolt() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-full w-full">
-      <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" strokeLinejoin="round" />
-    </svg>
-  );
-}
-function IconGear() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-full w-full">
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M18.4 18.4l-2.1-2.1M7.7 7.7 5.6 5.6" />
     </svg>
   );
 }

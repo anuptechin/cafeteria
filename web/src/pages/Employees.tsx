@@ -48,7 +48,6 @@ export function Employees() {
               <thead className="sticky top-0 bg-surface-white">
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
                   <th className="py-2 font-medium">Employee</th>
-                  <th className="py-2 font-medium">Department</th>
                   <th className="py-2 text-right font-medium">Meals</th>
                   <th className="py-2 text-right font-medium">Last Meal</th>
                 </tr>
@@ -58,14 +57,13 @@ export function Employees() {
                   <tr key={e.emp_id} className="border-b border-black/5 hover:bg-black/[0.02]">
                     <td className="py-2.5">
                       <div className="flex items-center gap-3">
-                        <Avatar empId={e.emp_id} name={e.name} size={34} />
+                        <Avatar empId={e.emp_id} name={e.name} imageUrl={e.image_id ? `/faces/${e.image_id}` : undefined} size={34} />
                         <div>
                           <div className="font-medium">{e.name}</div>
                           <div className="tnum text-xs text-ink-secondary">{e.emp_id}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="py-2.5 text-ink-secondary">{e.department}</td>
                     <td className="py-2.5 text-right tnum font-semibold">{count(e.meals)}</td>
                     <td className="py-2.5 text-right tnum text-ink-secondary">{e.last_seen ? timeOf(e.last_seen) : "—"}</td>
                   </tr>
