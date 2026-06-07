@@ -83,6 +83,14 @@ DROP INDEX IF EXISTS uq_punch;                 -- recreated below over (emp_id, 
 -- used rather than GENERATED columns because AT TIME ZONE is STABLE, not IMMUTABLE.
 CREATE OR REPLACE FUNCTION punches_set_local_datetime() RETURNS trigger AS $$
 BEGIN
+  -- The punch source (HikCentral) sends local IST wall-clock WITHOUT an offset,
+  -- but its DB driver pins the session to UTC, so Postgres reads that wall-clock
+  -- as UTC and the event lands 5h30m ahead once shown in IST. On INSERT, re-anchor:
+  -- take the wall-clock and relabel it Asia/Kolkata so punched_at is the true
+  -- instant — independent of whatever timezone the ingesting session uses.
+  IF TG_OP = 'INSERT' THEN
+    NEW.punched_at := (NEW.punched_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata';
+  END IF;
   NEW.punch_date := (NEW.punched_at AT TIME ZONE 'Asia/Kolkata')::date;
   NEW.punch_time := (NEW.punched_at AT TIME ZONE 'Asia/Kolkata')::time;
   RETURN NEW;
