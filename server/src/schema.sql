@@ -5,6 +5,16 @@
 --  plus meal_slots, users/audit (RBAC) and a derived employees view.
 -- ============================================================
 
+-- App is single-region (India). Make this database interpret timezone-less input
+-- and display timestamps as Asia/Kolkata (IST). The external punch push sends
+-- "Date and Time" WITHOUT an offset, so the session timezone decides what instant
+-- it means — without this it would be read as UTC and land 5h30m off. Persisted on
+-- the database (survives restarts); applies to sessions opened after this runs.
+DO $$
+BEGIN
+  EXECUTE format('ALTER DATABASE %I SET timezone TO %L', current_database(), 'Asia/Kolkata');
+END $$;
+
 -- Single, denormalized scan/punch table. Mirrors the Hikvision punch/access-event
 -- export — every meal (face scan) is one row, with the person + device captured
 -- inline. Rows are inserted externally (Hikvision / ingestion); the app reads only.
