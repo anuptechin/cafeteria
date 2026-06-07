@@ -56,7 +56,7 @@ export async function byEmployee(from: string, to: string, limit = 50, offset = 
             count(*)::int      AS meals,
             max(p.punched_at)  AS last_seen,
             (SELECT x.id FROM punches x
-              WHERE x.emp_id = p.emp_id AND x.image IS NOT NULL
+              WHERE x.emp_id = p.emp_id AND x.person_name IS NOT NULL
               ORDER BY x.punched_at DESC LIMIT 1) AS image_id
        FROM punches p
       WHERE p.punched_at >= $1 AND p.punched_at < $2
@@ -109,7 +109,7 @@ type FaceRow = {
 export async function recentFaces(limit = 10) {
   return query<FaceRow>(
     `SELECT id, emp_id, person_name AS name, device_id,
-            (image IS NOT NULL) AS has_image, punched_at
+            (person_name IS NOT NULL AND person_name <> '') AS has_image, punched_at
        FROM punches
       ORDER BY id DESC
       LIMIT $1`,
@@ -120,7 +120,7 @@ export async function recentFaces(limit = 10) {
 export async function punchesSince(lastId: number) {
   return query<FaceRow>(
     `SELECT id, emp_id, person_name AS name, device_id,
-            (image IS NOT NULL) AS has_image, punched_at
+            (person_name IS NOT NULL AND person_name <> '') AS has_image, punched_at
        FROM punches
       WHERE id > $1
       ORDER BY id ASC
@@ -139,7 +139,7 @@ export async function employeeReport(empId: string, from: string, to: string) {
     `SELECT emp_id,
             max(person_name) AS name,
             (SELECT x.id FROM punches x
-              WHERE x.emp_id = $1 AND x.image IS NOT NULL
+              WHERE x.emp_id = $1 AND x.person_name IS NOT NULL
               ORDER BY x.punched_at DESC LIMIT 1) AS image_id
        FROM punches
       WHERE emp_id = $1

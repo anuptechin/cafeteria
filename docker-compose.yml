@@ -45,6 +45,12 @@ services:
       SUPER_ADMIN_USER: ${SUPER_ADMIN_USER:?set SUPER_ADMIN_USER in .env}
       SUPER_ADMIN_NAME: ${SUPER_ADMIN_NAME:-Admin}
       SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:?set SUPER_ADMIN_PASSWORD in .env}
+      # Face photos synced by HikCentral, served by /faces/:id (read-only mount below).
+      FACES_DIR: /faces
+    volumes:
+      # Host dir of "<name>+_<emp_id>.jpg" photos -> read-only inside the container.
+      # Override the host path via FACES_DIR_HOST in .env (default: ./faces).
+      - ${FACES_DIR_HOST:-./faces}:/faces:ro
     depends_on:
       db:
         condition: service_healthy

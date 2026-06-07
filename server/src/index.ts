@@ -5,7 +5,9 @@ import { pool, query, one } from "./db.js";
 import { resolveRange, todayWindow } from "./ranges.js";
 import * as Q from "./queries.js";
 import { setupLive } from "./live.js";
+import fs from "node:fs";
 import { sniffImageType } from "./photos.js";
+import { resolveFacePath } from "./facesFs.js";
 import { authRouter } from "./auth-routes.js";
 import { requireAuth, requireRole, seedSuperAdmin } from "./auth.js";
 
@@ -14,18 +16,37 @@ app.set("trust proxy", true); // so clientIp() reads X-Forwarded-For correctly
 app.use(cors());
 app.use(express.json());
 
-// Serve a captured face image — the raw bytes stored in that punch row's "Images"
-// (bytea) column, addressed by punch id. Rows without an image 404 and the client
-// falls back to an inline monogram. Public (an <img> tag can't send auth headers).
+// Serve a captured face image for a punch, addressed by punch id. The photo is
+// resolved from the on-disk directory HikCentral syncs to (env.facesDir), keyed
+// by the punch's person_name / emp_id. Falls back to a real inline-bytea image if
+// one was stored, else 404 (the client then renders an inline monogram). Public
+// (an <img> tag can't send auth headers).
 app.get("/faces/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).end();
-    const row = await one<{ image: Buffer | null }>(`SELECT image FROM punches WHERE id = $1`, [id]);
-    if (!row?.image || row.image.length === 0) return res.status(404).end();
-    res.type(sniffImageType(row.image));
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    return res.end(row.image);
+    const row = await one<{ person_name: string | null; emp_id: string | null; image: Buffer | null }>(
+      `SELECT person_name, emp_id, image FROM punches WHERE id = $1`,
+      [id]
+    );
+    if (!row) return res.status(404).end();
+
+    // Preferred: the photo file on disk.
+    const file = resolveFacePath(row.person_name, row.emp_id);
+    if (file) {
+      res.type("image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return fs.createReadStream(file).on("error", () => res.status(404).end()).pipe(res);
+    }
+
+    // Back-compat: a genuine image stored inline (skip the tiny path/ref strings
+    // the feed sometimes writes — real captures are several KB).
+    if (row.image && row.image.length > 1024) {
+      res.type(sniffImageType(row.image));
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.end(row.image);
+    }
+    return res.status(404).end();
   } catch {
     res.status(500).end();
   }
@@ -121,7 +142,7 @@ app.get("/api/employees", async (req, res) => {
                 count(*) FILTER (WHERE p.punched_at >= $2 AND p.punched_at < $3)::int AS meals,
                 max(p.punched_at) FILTER (WHERE p.punched_at >= $2 AND p.punched_at < $3) AS last_seen,
                 (SELECT x.id FROM punches x
-                  WHERE x.emp_id = p.emp_id AND x.image IS NOT NULL
+                  WHERE x.emp_id = p.emp_id AND x.person_name IS NOT NULL
                   ORDER BY x.punched_at DESC LIMIT 1) AS image_id
            FROM punches p
           WHERE p.emp_id IS NOT NULL AND p.emp_id <> ''
