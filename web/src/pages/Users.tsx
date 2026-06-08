@@ -189,14 +189,6 @@ function CreateUser({ actorRole, cafeterias, onCreated }: { actorRole: Role; caf
             <CafeteriaMultiSelect options={cafeterias} selected={cafes} onChange={setCafes} />
           )}
 
-          <div className="rounded-xl border bg-surface-bege px-3.5 py-2.5 text-xs text-ink-secondary">
-            {role === "canteen_manager"
-              ? "Canteen managers see the Live Display only — limited to the cafeterias selected above."
-              : role === "hr_manager"
-              ? "HR managers have full access except User Management — data limited to the cafeterias selected above."
-              : "Admins have full access (all cafeterias)."}
-          </div>
-
           {err && (
             <div className="rounded-xl border border-error/30 bg-error/5 px-3.5 py-2.5 text-sm text-error">{err}</div>
           )}
