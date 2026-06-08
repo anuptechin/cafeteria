@@ -30,11 +30,13 @@ function daysSinceMonday(y: number, m: number, day: number): number {
   return (dow + 6) % 7;
 }
 
-// today  : since IST midnight today
-// week   : This Week — Monday 00:00 of the current week → now (week is Mon–Sun)
-// last3w : current week plus the previous two weeks (Monday 2 weeks back → now)
-// month  : This Month — 1st of the current month 00:00 → now
-export type RangeKey = "today" | "week" | "last3w" | "month" | "custom" | "all";
+// today : since IST midnight today
+// week0 : This Week        — Monday 00:00 of the current week → now (Mon–Sun)
+// week1 : Last Week        — the previous full Mon–Sun week
+// week2 : Week before last — two weeks ago, full Mon–Sun week
+// month : This Month       — 1st of the current month 00:00 → now
+// 60d   : rolling last 60 days
+export type RangeKey = "today" | "week0" | "week1" | "week2" | "month" | "60d" | "custom" | "all";
 
 export function resolveRange(
   key: string,
@@ -42,7 +44,7 @@ export function resolveRange(
   toStr?: string
 ): { from: string; to: string; key: RangeKey } {
   const now = new Date();
-  const to = now.toISOString();
+  const nowIso = now.toISOString();
   const { y, m, day } = parts(now);
 
   // Custom date filter (From–To, inclusive). Dates are YYYY-MM-DD in IST.
@@ -50,25 +52,34 @@ export function resolveRange(
     return {
       key: "custom",
       from: `${fromStr}T00:00:00+05:30`,
-      to: toStr ? `${toStr}T23:59:59.999+05:30` : to,
+      to: toStr ? `${toStr}T23:59:59.999+05:30` : nowIso,
     };
   }
 
-  const k = (["today", "week", "last3w", "month", "all"].includes(key) ? key : "month") as RangeKey;
-  const mondayOffset = daysSinceMonday(y, m, day);
+  const k = (["today", "week0", "week1", "week2", "month", "60d", "all"].includes(key) ? key : "month") as RangeKey;
+  const mo = daysSinceMonday(y, m, day); // days since this week's Monday
   let from: string;
+  let to = nowIso;
   switch (k) {
     case "today":
       from = istMidnight(y, m, day);
       break;
-    case "week":
-      from = istMidnightMinusDays(y, m, day, mondayOffset);
+    case "week0": // this week: Monday → now
+      from = istMidnightMinusDays(y, m, day, mo);
       break;
-    case "last3w":
-      from = istMidnightMinusDays(y, m, day, mondayOffset + 14);
+    case "week1": // last week: full Mon–Sun (end-exclusive at this week's Monday)
+      from = istMidnightMinusDays(y, m, day, mo + 7);
+      to = istMidnightMinusDays(y, m, day, mo);
+      break;
+    case "week2": // week before last: full Mon–Sun
+      from = istMidnightMinusDays(y, m, day, mo + 14);
+      to = istMidnightMinusDays(y, m, day, mo + 7);
       break;
     case "month":
       from = istMidnight(y, m, 1);
+      break;
+    case "60d":
+      from = new Date(now.getTime() - 60 * 864e5).toISOString();
       break;
     case "all":
     default:

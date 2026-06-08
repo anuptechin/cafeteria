@@ -114,9 +114,30 @@ export function Stat({
   );
 }
 
+import { useState } from "react";
 import type { RangeState } from "../lib/api";
 
 const todayISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
+// The three selectable individual weeks (each a full Mon–Sun window).
+const WEEK_KEYS = ["week0", "week1", "week2"] as const;
+const WEEK_LABEL: Record<string, string> = {
+  week0: "This Week",
+  week1: "Last Week",
+  week2: "Week before last",
+};
+
+// Mon–Sun date label for the week `n` weeks before the current one (IST).
+function weekDateLabel(n: number): string {
+  const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const since = (ist.getDay() + 6) % 7; // days since Monday
+  const mon = new Date(ist);
+  mon.setDate(ist.getDate() - since - 7 * n);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const f = (d: Date) => d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  return `${f(mon)} – ${f(sun)}`;
+}
 
 export function RangePicker({
   value,
@@ -125,15 +146,17 @@ export function RangePicker({
   value: RangeState;
   onChange: (v: RangeState) => void;
 }) {
+  const [weekOpen, setWeekOpen] = useState(false);
   const opts = [
     { k: "today", l: "Today" },
-    { k: "week", l: "This Week" },
-    { k: "last3w", l: "Last 3 Weeks" },
     { k: "month", l: "This Month" },
+    { k: "60d", l: "60 Days" },
     { k: "custom", l: "Custom" },
   ];
+  const isWeek = WEEK_KEYS.includes(value.key as any);
 
   const pick = (k: string) => {
+    setWeekOpen(false);
     if (k === "custom") {
       const to = value.to || todayISO();
       const from =
@@ -147,8 +170,52 @@ export function RangePicker({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="inline-flex rounded-full border bg-surface-white p-0.5">
-        {opts.map((o) => (
+      <div className="inline-flex items-center rounded-full border bg-surface-white p-0.5">
+        {/* Today */}
+        <button
+          onClick={() => pick("today")}
+          className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+            value.key === "today" ? "bg-black text-white" : "text-ink-secondary hover:text-black"
+          }`}
+        >
+          Today
+        </button>
+
+        {/* Week ▾ — pick one of the last three weeks */}
+        <div className="relative">
+          <button
+            onClick={() => setWeekOpen((v) => !v)}
+            className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+              isWeek ? "bg-black text-white" : "text-ink-secondary hover:text-black"
+            }`}
+          >
+            {isWeek ? WEEK_LABEL[value.key] : "Week"}
+            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {weekOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setWeekOpen(false)} />
+              <div className="absolute left-0 top-full z-20 mt-1 w-52 overflow-hidden rounded-xl border bg-surface-white shadow-pop">
+                {WEEK_KEYS.map((wk, i) => (
+                  <button
+                    key={wk}
+                    onClick={() => pick(wk)}
+                    className={`flex w-full flex-col items-start px-3 py-2 text-left transition-colors hover:bg-black/5 ${
+                      value.key === wk ? "bg-black/[0.06]" : ""
+                    }`}
+                  >
+                    <span className="text-xs font-semibold">{WEEK_LABEL[wk]}</span>
+                    <span className="tnum text-[10px] text-ink-secondary">{weekDateLabel(i)}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {opts.slice(1).map((o) => (
           <button
             key={o.k}
             onClick={() => pick(o.k)}
