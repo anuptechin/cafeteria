@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { withActor } from "./db.js";
+import { withActor, query } from "./db.js";
 import {
   hashPassword,
   verifyPassword,
@@ -32,6 +32,37 @@ const STRONG = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 
 const USER_COLS =
   "id, username, name, role, active, created_at, created_by, last_login_at";
+
+// Attach each user's assigned cafeterias (super_admin/admin manage all, so theirs
+// is left empty — the client treats those roles as "all").
+async function withCafeterias<T extends { id: number }>(rows: T[]): Promise<(T & { cafeterias: number[] })[]> {
+  if (!rows.length) return [];
+  const ids = rows.map((u) => u.id);
+  const asg = await query<{ user_id: number; cafeteria_id: number }>(
+    `SELECT user_id, cafeteria_id FROM user_cafeterias WHERE user_id = ANY($1)`,
+    [ids]
+  );
+  const byUser = new Map<number, number[]>();
+  for (const a of asg) {
+    const arr = byUser.get(a.user_id) ?? [];
+    arr.push(a.cafeteria_id);
+    byUser.set(a.user_id, arr);
+  }
+  return rows.map((u) => ({ ...u, cafeterias: byUser.get(u.id) ?? [] }));
+}
+
+// Replace a user's cafeteria assignments (no-op if `cafeterias` isn't an array).
+async function setCafeterias(userId: number, cafeterias: unknown) {
+  if (!Array.isArray(cafeterias)) return;
+  const ids = cafeterias.map(Number).filter((n) => Number.isFinite(n));
+  await query(`DELETE FROM user_cafeterias WHERE user_id = $1`, [userId]);
+  if (ids.length)
+    await query(
+      `INSERT INTO user_cafeterias (user_id, cafeteria_id)
+         SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING`,
+      [userId, ids]
+    );
+}
 
 // ============================================================
 //  Session
@@ -133,7 +164,7 @@ authRouter.get("/users", requireAuth, requireRole("admin", "super_admin"), async
         )
         .then((r) => r.rows)
     );
-    ok(res, rows);
+    ok(res, await withCafeterias(rows));
   } catch (e) {
     fail(res, e);
   }
@@ -167,8 +198,11 @@ authRouter.post("/users", requireAuth, requireRole("admin", "super_admin"), asyn
           )
           .then((r) => r.rows[0])
       );
+      // Restricted roles can be limited to specific cafeterias.
+      if (role === "hr_manager" || role === "canteen_manager")
+        await setCafeterias(row.id, req.body.cafeterias);
       await audit(req, "USER_CREATED", { detail: `Created ${role} ${username}` });
-      ok(res, row);
+      ok(res, (await withCafeterias([row]))[0]);
     } catch (e: any) {
       if (e?.code === "23505")
         return res.status(409).json({ ok: false, error: "Username already exists" });
@@ -208,10 +242,13 @@ authRouter.patch("/users/:id", requireAuth, requireRole("admin", "super_admin"),
       return { t, row };
     });
 
+    // Update cafeteria access for restricted roles when provided.
+    if ((out.t.role === "hr_manager" || out.t.role === "canteen_manager") && Array.isArray(req.body.cafeterias))
+      await setCafeterias(id, req.body.cafeterias);
     await audit(req, active === false ? "USER_DISABLED" : "USER_UPDATED", {
       detail: `${out.t.username}${active === false ? " disabled" : active === true ? " enabled" : " updated"}`,
     });
-    ok(res, out.row);
+    ok(res, (await withCafeterias([out.row]))[0]);
   } catch (e) {
     fail(res, e);
   }
@@ -285,7 +322,8 @@ authRouter.get("/audit", requireAuth, requireRole("super_admin"), async (req, re
         .query(
           `SELECT id, at, user_id, username, name, role, action, detail, ip, user_agent, session_id
              FROM audit_log
-            WHERE ($1::text IS NULL OR action = $1)
+            WHERE at > now() - interval '3 months'        -- retention window: last 3 months only
+              AND ($1::text IS NULL OR action = $1)
               AND ($2::text IS NULL OR username ILIKE $2 OR name ILIKE $2 OR ip ILIKE $2)
             ORDER BY at DESC
             LIMIT $3`,
@@ -319,6 +357,7 @@ authRouter.get("/audit/sessions", requireAuth, requireRole("super_admin"), async
                    ORDER BY at ASC LIMIT 1
              ) lo ON TRUE
             WHERE li.action = 'LOGIN'
+              AND li.at > now() - interval '3 months'        -- retention window: last 3 months only
             ORDER BY li.at DESC
             LIMIT $1`,
           [limit]

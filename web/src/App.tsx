@@ -5,6 +5,7 @@ import { Reports } from "./pages/Reports";
 import { Employees } from "./pages/Employees";
 import { Audit } from "./pages/Audit";
 import { Users } from "./pages/Users";
+import { Cafeterias } from "./pages/Cafeterias";
 import { Login } from "./pages/Login";
 import { useLivePunches, ROLE_LABEL, type Role } from "./lib/api";
 import { AuthProvider, useAuth } from "./lib/auth";
@@ -15,6 +16,7 @@ type Route =
   | "display"
   | "reports"
   | "employees"
+  | "cafeterias"
   | "audit"
   | "users";
 
@@ -23,6 +25,7 @@ const NAV: { key: Route; label: string; icon: JSX.Element; roles: Role[] }[] = [
   { key: "display", label: "Live Display", icon: <IconScreen />, roles: ["super_admin", "admin", "hr_manager", "canteen_manager"] },
   { key: "reports", label: "Reports", icon: <IconDoc />, roles: ["super_admin", "admin", "hr_manager"] },
   { key: "employees", label: "Employees", icon: <IconUsers />, roles: ["super_admin", "admin", "hr_manager"] },
+  { key: "cafeterias", label: "Cafeteria Settings", icon: <IconStore />, roles: ["super_admin", "admin"] },
   { key: "users", label: "Users & Access", icon: <IconShieldUser />, roles: ["super_admin", "admin"] },
   { key: "audit", label: "Audit Log", icon: <IconHistory />, roles: ["super_admin"] },
 ];
@@ -105,6 +108,7 @@ function AppShell() {
           {route === "dashboard" && <Dashboard />}
           {route === "reports" && <Reports />}
           {route === "employees" && <Employees />}
+          {route === "cafeterias" && <Cafeterias />}
           {route === "users" && <Users />}
           {route === "audit" && <Audit />}
         </div>
@@ -226,6 +230,15 @@ function IconUsers() {
       <circle cx="9" cy="8" r="3.2" />
       <path d="M3.5 20c0-3.6 2.7-5.5 5.5-5.5s5.5 1.9 5.5 5.5" />
       <path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 20c0-3-1.5-4.8-3.3-5.4" />
+    </svg>
+  );
+}
+function IconStore() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-full w-full">
+      <path d="M4 9.5V20a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9.5" strokeLinecap="round" />
+      <path d="M3 4.5h18l-1.2 4.2a2.2 2.2 0 0 1-4.3-.1 2.2 2.2 0 0 1-4.4 0 2.2 2.2 0 0 1-4.4 0 2.2 2.2 0 0 1-4.3.1L3 4.5Z" strokeLinejoin="round" />
+      <path d="M9.5 21v-5.5h5V21" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

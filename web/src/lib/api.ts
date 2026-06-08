@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export type TrendPoint = { d: string; total: number; lunch: number; dinner: number; tea: number; biscuit: number };
 export type DashboardData = {
   range: string;
+  from: string;
+  to: string;
+  cafeteria: number | null;
+  meal: string | null;
+  cafeterias: { id: number; name: string }[];
   totals: { meals: number };
   uniqueEmployees: number;
   activeDevices: number;
   avgPerDay: number;
   today: { meals: number; employees: number };
-  trend: { d: string; meals: number }[];
-  devices: { device_id: string; meals: number }[];
+  trend: TrendPoint[];
+  devices: { device_id: string; category: string | null; meals: number }[];
   topEmployees: { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null }[];
-  slots: { name: string; meals: number }[];
+  meals: { meal: string; meals: number }[];
+  byCafeteria: { name: string; meals: number }[];
   hourly: { hour: number; meals: number }[];
 };
 
@@ -20,6 +27,8 @@ export type Face = {
   name: string | null;
   has_image: boolean;
   device_id: string | null;
+  meal: string | null;
+  cafeteria_name: string | null;
   punched_at: string;
 };
 
@@ -90,6 +99,7 @@ export type ManagedUser = AuthedUser & {
   created_at: string;
   created_by: string | null;
   last_login_at: string | null;
+  cafeterias: number[]; // assigned cafeteria ids (empty for super_admin/admin = all)
 };
 export type AuditRow = {
   id: number;
@@ -116,20 +126,72 @@ export type SessionRow = {
   active: boolean;
 };
 
+// ---- cafeterias / devices / meal windows ----
+export type MealCategory = "lunch_dinner" | "tea" | "biscuits";
+export const CATEGORY_LABEL: Record<MealCategory, string> = {
+  lunch_dinner: "Lunch / Dinner",
+  tea: "Tea",
+  biscuits: "Biscuits",
+};
+export const CATEGORIES: MealCategory[] = ["lunch_dinner", "tea", "biscuits"];
+export type Device = {
+  device_id: string;
+  cafeteria_id: number;
+  category: MealCategory;
+  label: string | null;
+};
+export type TimeSlot = {
+  id: number;
+  cafeteria_id: number;
+  meal: string; // "Lunch" | "Dinner" | "Tea/Snack"
+  start_time: string;
+  end_time: string;
+  dedup_mode: "once_per_slot" | "1min";
+  sort: number;
+};
+export type Cafeteria = {
+  id: number;
+  name: string;
+  active: boolean;
+  created_at: string;
+  devices: Device[];
+  slots: TimeSlot[];
+  todayMeals: Record<string, number>;
+};
+
 // Time-range selection used across pages.
 export type RangeState = { key: string; from: string; to: string };
 const rq = (r: RangeState) =>
   `range=${r.key}${r.from ? `&from=${r.from}` : ""}${r.to ? `&to=${r.to}` : ""}`;
+// optional cafeteria + meal query suffix
+const cm = (cafeteriaId?: number | null, meal?: string | null) =>
+  (cafeteriaId ? `&cafeteria=${cafeteriaId}` : "") + (meal ? `&meal=${encodeURIComponent(meal)}` : "");
 
 export const api = {
-  dashboard: (r: RangeState) => getJSON<DashboardData>(`/api/dashboard?${rq(r)}`),
-  recentFaces: (limit = 10) => getJSON<Face[]>(`/api/recent-faces?limit=${limit}`),
-  employees: (r: RangeState, search = "") =>
-    getJSON<any[]>(`/api/employees?${rq(r)}&search=${encodeURIComponent(search)}&limit=120`),
-  deviceReport: (r: RangeState) => getJSON<any>(`/api/reports/device?${rq(r)}`),
-  employeesReport: (r: RangeState) => getJSON<any>(`/api/reports/employees?${rq(r)}`),
-  employeeReport: (empId: string, r: RangeState) =>
-    getJSON<any>(`/api/reports/employee/${empId}?${rq(r)}`),
+  dashboard: (r: RangeState, cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<DashboardData>(`/api/dashboard?${rq(r)}` + cm(cafeteriaId, meal)),
+  recentFaces: (limit = 10, cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<Face[]>(`/api/recent-faces?limit=${limit}` + cm(cafeteriaId, meal)),
+  // Range-bound recent (dashboard) — honors the date picker + cafeteria + meal.
+  recentInRange: (r: RangeState, limit = 15, cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<Face[]>(`/api/recent-faces?limit=${limit}&${rq(r)}` + cm(cafeteriaId, meal)),
+  liveCafeterias: () => getJSON<{ id: number; name: string }[]>(`/api/live/cafeterias`),
+  liveCount: (cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<{ count: number; label: string }>(
+      `/api/live/count?1=1` +
+        (cafeteriaId ? `&cafeteria=${cafeteriaId}` : "") +
+        (meal ? `&meal=${encodeURIComponent(meal)}` : "")
+    ),
+  employees: (r: RangeState, search = "", cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<any[]>(
+      `/api/employees?${rq(r)}&search=${encodeURIComponent(search)}&limit=120` + cm(cafeteriaId, meal)
+    ),
+  deviceReport: (r: RangeState, cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<any>(`/api/reports/device?${rq(r)}` + cm(cafeteriaId, meal)),
+  employeesReport: (r: RangeState, cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<any>(`/api/reports/employees?${rq(r)}` + cm(cafeteriaId, meal)),
+  employeeReport: (empId: string, r: RangeState, cafeteriaId?: number | null, meal?: string | null) =>
+    getJSON<any>(`/api/reports/employee/${empId}?${rq(r)}` + cm(cafeteriaId, meal)),
 
   // ---- auth ----
   login: (username: string, password: string) =>
@@ -145,9 +207,9 @@ export const api = {
 
   // ---- user management ----
   users: () => getJSON<ManagedUser[]>(`/api/users`),
-  createUser: (body: { username: string; name: string; password: string; role: Role }) =>
+  createUser: (body: { username: string; name: string; password: string; role: Role; cafeterias?: number[] }) =>
     sendJSON<{ ok: boolean; error?: string; data?: ManagedUser }>(`/api/users`, "POST", body),
-  updateUser: (id: number, body: { active?: boolean; name?: string }) =>
+  updateUser: (id: number, body: { active?: boolean; name?: string; cafeterias?: number[] }) =>
     sendJSON(`/api/users/${id}`, "PATCH", body),
   resetUserPassword: (id: number, password: string) =>
     sendJSON(`/api/users/${id}/reset-password`, "POST", { password }),
@@ -161,12 +223,49 @@ export const api = {
     if (params.limit) q.set("limit", String(params.limit));
     return getJSON<AuditRow[]>(`/api/audit?${q.toString()}`);
   },
+  // ---- cafeterias / devices / meal windows ----
+  cafeterias: () => getJSON<Cafeteria[]>(`/api/cafeterias`),
+  createCafeteria: (name: string) =>
+    sendJSON<{ ok: boolean; error?: string; data?: Cafeteria }>(`/api/cafeterias`, "POST", { name }),
+  updateCafeteria: (id: number, body: { name?: string; active?: boolean }) =>
+    sendJSON(`/api/cafeterias/${id}`, "PATCH", body),
+  deleteCafeteria: (id: number) => sendJSON(`/api/cafeterias/${id}`, "DELETE"),
+  addDevice: (body: { device_id: string; cafeteria_id: number; category: MealCategory; label?: string }) =>
+    sendJSON<{ ok: boolean; error?: string; data?: Device }>(`/api/devices`, "POST", body),
+  updateDevice: (
+    deviceId: string,
+    body: { cafeteria_id?: number; category?: MealCategory; label?: string }
+  ) => sendJSON(`/api/devices/${encodeURIComponent(deviceId)}`, "PATCH", body),
+  deleteDevice: (deviceId: string) =>
+    sendJSON(`/api/devices/${encodeURIComponent(deviceId)}`, "DELETE"),
+  saveTimeSlots: (id: number, slots: { id: number; start_time: string; end_time: string }[]) =>
+    sendJSON(`/api/cafeterias/${id}/time-slots`, "PUT", { slots }),
+
   auditSessions: (limit = 100) => getJSON<SessionRow[]>(`/api/audit/sessions?limit=${limit}`),
   auditStats: () =>
     getJSON<{ totalLogins: number; failed7d: number; activeSessions: number; loginsToday: number }>(
       `/api/audit/stats`
     ),
 };
+
+// Shared meal filter options (value matches punch_meals.meal; null = all).
+export const MEAL_FILTERS: { k: string; label: string; val: string | null }[] = [
+  { k: "all", label: "All meals", val: null },
+  { k: "Lunch", label: "Lunch", val: "Lunch" },
+  { k: "Dinner", label: "Dinner", val: "Dinner" },
+  { k: "Tea", label: "Tea", val: "Tea" },
+  { k: "Biscuit", label: "Biscuit", val: "Biscuit" },
+];
+
+// Cafeteria list for filter dropdowns (uses the open live endpoint, so staff
+// roles that can't hit the admin cafeterias endpoint still get the list).
+export function useCafeterias() {
+  const [list, setList] = useState<{ id: number; name: string }[]>([]);
+  useEffect(() => {
+    api.liveCafeterias().then(setList).catch(() => {});
+  }, []);
+  return list;
+}
 
 // Generic polling fetch hook.
 export function usePoll<T>(fn: () => Promise<T>, deps: any[], intervalMs = 5000) {

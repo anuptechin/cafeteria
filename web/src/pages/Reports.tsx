@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, usePoll, type RangeState } from "../lib/api";
+import { api, usePoll, useCafeterias, MEAL_FILTERS, type RangeState } from "../lib/api";
 import { Card, RangePicker, Avatar, CardSkeleton, Empty } from "../components/ui";
 import { count, dateOf, timeOf } from "../lib/format";
 
@@ -15,9 +15,27 @@ function downloadCSV(filename: string, rows: (string | number)[][]) {
   URL.revokeObjectURL(url);
 }
 
+// Reusable little dropdown for the filter bar.
+function FilterSelect({ value, onChange, children }: { value: string | number; onChange: (v: string) => void; children: React.ReactNode }) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-full border bg-surface-white px-3 py-1.5 text-xs font-medium outline-none focus:ring-2 focus:ring-black/10"
+    >
+      {children}
+    </select>
+  );
+}
+
+const deviceLabel = (r: { device_id: string; meal: string | null }) =>
+  r.meal ? `${r.device_id} (${r.meal})` : r.device_id;
+
 export function Reports() {
   const [tab, setTab] = useState<Tab>("device");
   const [range, setRange] = useState<RangeState>({ key: "60d", from: "", to: "" });
+  const [cafe, setCafe] = useState<number | null>(null);
+  const cafeterias = useCafeterias();
 
   return (
     <div className="space-y-6">
@@ -26,7 +44,13 @@ export function Reports() {
           <h1 className="text-2xl font-bold tracking-tight">Reports</h1>
           <p className="mt-0.5 text-sm text-ink-secondary">Meal-count records for audit & dispute reference.</p>
         </div>
-        <RangePicker value={range} onChange={setRange} />
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterSelect value={cafe ?? ""} onChange={(v) => setCafe(v ? Number(v) : null)}>
+            <option value="">All cafeterias</option>
+            {cafeterias.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </FilterSelect>
+          <RangePicker value={range} onChange={setRange} />
+        </div>
       </header>
 
       <div className="inline-flex rounded-full border bg-surface-white p-0.5">
@@ -43,15 +67,15 @@ export function Reports() {
         ))}
       </div>
 
-      {tab === "device" && <DeviceReport range={range} onCSV={downloadCSV} />}
-      {tab === "employees" && <EmployeesReport range={range} onCSV={downloadCSV} />}
-      {tab === "lookup" && <EmployeeLookup range={range} />}
+      {tab === "device" && <DeviceReport range={range} cafe={cafe} onCSV={downloadCSV} />}
+      {tab === "employees" && <EmployeesReport range={range} cafe={cafe} onCSV={downloadCSV} />}
+      {tab === "lookup" && <EmployeeLookup range={range} cafe={cafe} cafeterias={cafeterias} />}
     </div>
   );
 }
 
-function DeviceReport({ range, onCSV }: { range: RangeState; onCSV: typeof downloadCSV }) {
-  const { data } = usePoll(() => api.deviceReport(range), [range], 0);
+function DeviceReport({ range, cafe, onCSV }: { range: RangeState; cafe: number | null; onCSV: typeof downloadCSV }) {
+  const { data } = usePoll(() => api.deviceReport(range, cafe), [range, cafe], 0);
   if (!data) return <CardSkeleton h={300} />;
   return (
     <Card
@@ -60,9 +84,9 @@ function DeviceReport({ range, onCSV }: { range: RangeState; onCSV: typeof downl
         <button
           onClick={() =>
             onCSV(`device_${range.key}.csv`, [
-              ["Device", "Meals"],
-              ...data.rows.map((r: any) => [r.device_id, r.meals]),
-              ["TOTAL", data.totalMeals],
+              ["Device", "Meal", "Meals"],
+              ...data.rows.map((r: any) => [r.device_id, r.meal ?? "—", r.meals]),
+              ["TOTAL", "", data.totalMeals],
             ])
           }
           className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
@@ -73,20 +97,23 @@ function DeviceReport({ range, onCSV }: { range: RangeState; onCSV: typeof downl
     >
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Kpi label="Total Meals" value={count(data.totalMeals)} />
-        <Kpi label="Devices" value={count(data.rows.length)} />
-        <Kpi label="Busiest" value={data.rows[0]?.device_id ?? "—"} small />
+        <Kpi label="Device + Meal rows" value={count(data.rows.length)} />
+        <Kpi label="Busiest" value={data.rows[0] ? deviceLabel(data.rows[0]) : "—"} small />
       </div>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
-            <th className="py-2 font-medium">Device</th>
+            <th className="py-2 font-medium">Device (Meal)</th>
             <th className="py-2 text-right font-medium">Meals</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map((r: any) => (
-            <tr key={r.device_id} className="border-b border-black/5 hover:bg-black/[0.02]">
-              <td className="py-2.5 font-medium">{r.device_id}</td>
+            <tr key={`${r.device_id}-${r.meal ?? "none"}`} className="border-b border-black/5 hover:bg-black/[0.02]">
+              <td className="py-2.5 font-medium">
+                {r.device_id}
+                {r.meal && <span className="ml-1.5 rounded bg-black/5 px-1.5 py-0.5 text-xs font-semibold text-ink-secondary">{r.meal}</span>}
+              </td>
               <td className="py-2.5 text-right tnum font-semibold">{count(r.meals)}</td>
             </tr>
           ))}
@@ -100,8 +127,10 @@ function DeviceReport({ range, onCSV }: { range: RangeState; onCSV: typeof downl
   );
 }
 
-function EmployeesReport({ range, onCSV }: { range: RangeState; onCSV: typeof downloadCSV }) {
-  const { data } = usePoll(() => api.employeesReport(range), [range], 0);
+function EmployeesReport({ range, cafe, onCSV }: { range: RangeState; cafe: number | null; onCSV: typeof downloadCSV }) {
+  const [meal, setMeal] = useState("all");
+  const mealVal = MEAL_FILTERS.find((m) => m.k === meal)!.val;
+  const { data } = usePoll(() => api.employeesReport(range, cafe, mealVal), [range, cafe, mealVal], 0);
   const [q, setQ] = useState("");
   if (!data) return <CardSkeleton h={300} />;
 
@@ -116,23 +145,28 @@ function EmployeesReport({ range, onCSV }: { range: RangeState; onCSV: typeof do
     <Card
       title="Meals by Employee (Audit)"
       action={
-        <button
-          onClick={() =>
-            onCSV(`employee_meals_${range.key}.csv`, [
-              ["Emp ID", "Name", "Meals"],
-              ...data.rows.map((r: any) => [r.emp_id, r.name, r.meals]),
-              ["", "TOTAL", data.totalMeals],
-            ])
-          }
-          className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
-        >
-          Export CSV (all)
-        </button>
+        <div className="flex items-center gap-2">
+          <FilterSelect value={meal} onChange={setMeal}>
+            {MEAL_FILTERS.map((m) => <option key={m.k} value={m.k}>{m.label}</option>)}
+          </FilterSelect>
+          <button
+            onClick={() =>
+              onCSV(`employee_meals_${range.key}_${meal}.csv`, [
+                ["Emp ID", "Name", "Meals"],
+                ...data.rows.map((r: any) => [r.emp_id, r.name, r.meals]),
+                ["", "TOTAL", data.totalMeals],
+              ])
+            }
+            className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
+          >
+            Export CSV (all)
+          </button>
+        </div>
       }
     >
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Kpi label="Employees" value={count(data.rows.length)} />
-        <Kpi label="Total Meals" value={count(data.totalMeals)} />
+        <Kpi label={meal === "all" ? "Total Meals" : `${meal} Meals`} value={count(data.totalMeals)} />
         <Kpi label="Showing" value={`${count(shown.length)} of ${count(filtered.length)}`} small />
       </div>
       <input
@@ -176,27 +210,27 @@ function EmployeesReport({ range, onCSV }: { range: RangeState; onCSV: typeof do
   );
 }
 
-function EmployeeLookup({ range }: { range: RangeState }) {
+function EmployeeLookup({ range, cafe, cafeterias }: { range: RangeState; cafe: number | null; cafeterias: { id: number; name: string }[] }) {
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<any[]>([]);
   const [selected, setSelected] = useState("");
   const { data, error, loading } = usePoll(
-    () => (selected ? api.employeeReport(selected, range) : Promise.resolve(null)),
-    [selected, range],
+    () => (selected ? api.employeeReport(selected, range, cafe) : Promise.resolve(null)),
+    [selected, range, cafe],
     0
   );
 
-  // search by name OR id (debounced)
+  // search by name OR id (debounced), scoped to the selected cafeteria
   useEffect(() => {
     if (!term.trim()) {
       setResults([]);
       return;
     }
     const t = setTimeout(() => {
-      api.employees(range, term.trim()).then((r) => setResults(r.slice(0, 8))).catch(() => {});
+      api.employees(range, term.trim(), cafe).then((r) => setResults(r.slice(0, 8))).catch(() => {});
     }, 200);
     return () => clearTimeout(t);
-  }, [term, range]);
+  }, [term, range, cafe]);
 
   const choose = (r: any) => {
     setSelected(r.emp_id);
@@ -208,6 +242,8 @@ function EmployeeLookup({ range }: { range: RangeState }) {
     else if (term.trim()) setSelected(term.trim());
   };
 
+  const cafeName = cafeterias.find((c) => c.id === cafe)?.name;
+
   return (
     <div className="space-y-4">
       <Card>
@@ -216,7 +252,7 @@ function EmployeeLookup({ range }: { range: RangeState }) {
             value={term}
             onChange={(e) => { setTerm(e.target.value); setSelected(""); }}
             onKeyDown={(e) => e.key === "Enter" && onEnter()}
-            placeholder="Search by name or employee ID…"
+            placeholder={`Search by name or employee ID${cafeName ? ` · ${cafeName}` : ""}…`}
             className="w-full rounded-xl border bg-surface-bege px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-black/10"
           />
           {results.length > 0 && (
@@ -242,45 +278,68 @@ function EmployeeLookup({ range }: { range: RangeState }) {
 
       {selected && loading && <CardSkeleton h={200} />}
       {error && <Card className="border-error/30 bg-error/5"><span className="text-sm text-error">{error}</span></Card>}
-      {data && (
-        <Card>
-          <div className="mb-5 flex items-center gap-4">
-            <Avatar empId={data.emp.emp_id} name={data.emp.name} imageUrl={data.emp.image_id ? `/faces/${data.emp.image_id}` : undefined} size={56} />
-            <div>
-              <div className="text-xl font-bold">{data.emp.name}</div>
-              <div className="text-sm text-ink-secondary">
-                <span className="tnum">{data.emp.emp_id}</span>
-              </div>
-            </div>
-            <div className="ml-auto text-right">
-              <div className="text-xs text-ink-secondary">Meals</div>
-              <div className="tnum text-3xl font-bold">{count(data.totalMeals)}</div>
-            </div>
-          </div>
-          <div className="max-h-80 overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-surface-white">
-                <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
-                  <th className="py-2 font-medium">Date</th>
-                  <th className="py-2 font-medium">Time</th>
-                  <th className="py-2 font-medium">Device</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.punches.map((p: any) => (
-                  <tr key={p.id} className="border-b border-black/5">
-                    <td className="py-2">{dateOf(p.punched_at)}</td>
-                    <td className="py-2 tnum">{timeOf(p.punched_at)}</td>
-                    <td className="py-2">{p.device_id ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!data.punches.length && <Empty>No meals in this period.</Empty>}
-          </div>
-        </Card>
-      )}
+      {data && <EmployeeDetail data={data} />}
     </div>
+  );
+}
+
+const MEAL_KPIS: { k: string; tone: string }[] = [
+  { k: "Lunch", tone: "#B93E19" },
+  { k: "Dinner", tone: "#000000" },
+  { k: "Tea", tone: "#19B924" },
+  { k: "Biscuit", tone: "#B99919" },
+];
+
+function EmployeeDetail({ data }: { data: any }) {
+  return (
+    <Card>
+      <div className="mb-5 flex items-center gap-4">
+        <Avatar empId={data.emp.emp_id} name={data.emp.name} imageUrl={data.emp.image_id ? `/faces/${data.emp.image_id}` : undefined} size={56} />
+        <div>
+          <div className="text-xl font-bold">{data.emp.name}</div>
+          <div className="text-sm text-ink-secondary"><span className="tnum">{data.emp.emp_id}</span></div>
+        </div>
+        <div className="ml-auto text-right">
+          <div className="text-xs text-ink-secondary">Total Meals</div>
+          <div className="tnum text-3xl font-bold">{count(data.totalMeals)}</div>
+        </div>
+      </div>
+
+      {/* Per-meal KPI numbers */}
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {MEAL_KPIS.map((m) => (
+          <div key={m.k} className="relative overflow-hidden rounded-xl border bg-surface-bege p-3">
+            <div className="absolute left-0 top-0 h-full w-1" style={{ background: m.tone }} />
+            <div className="text-xs text-ink-secondary">{m.k}</div>
+            <div className="tnum text-2xl font-bold">{count(data.kpi?.[m.k] ?? 0)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="max-h-80 overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-surface-white">
+            <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
+              <th className="py-2 font-medium">Date</th>
+              <th className="py-2 font-medium">Time</th>
+              <th className="py-2 font-medium">Meal</th>
+              <th className="py-2 font-medium">Cafeteria · Device</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.punches.map((p: any) => (
+              <tr key={p.id} className="border-b border-black/5">
+                <td className="py-2">{dateOf(p.punched_at)}</td>
+                <td className="py-2 tnum">{timeOf(p.punched_at)}</td>
+                <td className="py-2">{p.meal ?? "—"}</td>
+                <td className="py-2 text-ink-secondary">{(p.cafeteria_name ? p.cafeteria_name + " · " : "") + (p.device_id ?? "—")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!data.punches.length && <Empty>No meals in this period.</Empty>}
+      </div>
+    </Card>
   );
 }
 

@@ -31,6 +31,8 @@ export type AuthUser = {
   name: string;
   role: Role;
   sid: string; // session id — pairs a LOGIN with its LOGOUT in the audit trail
+  // Cafeteria access: null = ALL (super_admin / admin); array = restricted set.
+  cafeterias: number[] | null;
 };
 
 const TOKEN_TTL = "12h";
@@ -50,7 +52,8 @@ export function signToken(u: Omit<AuthUser, "sid"> & { sid?: string }): string {
 export function verifyToken(token: string): AuthUser | null {
   try {
     const p = jwt.verify(token, env.jwtSecret) as any;
-    return { id: p.id, username: p.username, name: p.name, role: p.role, sid: p.sid };
+    // cafeterias is re-resolved from the DB on every request (see requireAuth).
+    return { id: p.id, username: p.username, name: p.name, role: p.role, sid: p.sid, cafeterias: null };
   } catch {
     return null;
   }
@@ -100,6 +103,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     if (!fresh || !fresh.active)
       return res.status(401).json({ ok: false, error: "Session is no longer valid" });
 
+    // Cafeteria access: super_admin / admin see all (null); others are limited to
+    // their assigned set. Resolved from the DB each request, like role/active.
+    let cafeterias: number[] | null = null;
+    if (fresh.role !== "super_admin" && fresh.role !== "admin") {
+      const crows = await query<{ cafeteria_id: number }>(
+        "SELECT cafeteria_id FROM user_cafeterias WHERE user_id = $1",
+        [fresh.id]
+      );
+      cafeterias = crows.map((r) => r.cafeteria_id);
+    }
+
     // DB role wins over whatever the token says.
     req.user = {
       id: fresh.id,
@@ -107,6 +121,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       name: fresh.name,
       role: fresh.role,
       sid: claim.sid,
+      cafeterias,
     };
     next();
   } catch (e) {

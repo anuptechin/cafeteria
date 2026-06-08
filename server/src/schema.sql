@@ -126,23 +126,74 @@ CREATE OR REPLACE TRIGGER trg_punches_dedup
   BEFORE INSERT ON punches
   FOR EACH ROW EXECUTE FUNCTION punches_skip_duplicate();
 
--- Accidental double-tap guard. A meal is one event: if the same employee is
--- scanned again within 1 minute (reader double-fired, or they tapped repeatedly
--- by mistake), those extra scans are NOT separate meals. Skip the insert silently
--- so counts reflect one meal per person per minute. This trigger's name sorts
--- AFTER trg_punches_local_datetime, so it runs once punched_at is the final
--- re-anchored IST instant — compared apples-to-apples against stored rows.
--- Identified employees only; NULL/blank emp_id (unrecognised faces) are never
--- collapsed together.
+-- Meal-aware de-duplication guard. The rule depends on the device's category
+-- (see cafeteria_devices) and the configured time_slots:
+--   * Lunch / Dinner devices  -> ONE meal per person for the WHOLE slot. A repeat
+--       scan anywhere inside today's lunch (or dinner) window is dropped.
+--   * Tea / Biscuit (and any unmapped device) -> rapid-repeat guard: a repeat scan
+--       by the same person on the SAME category within 1 minute is dropped.
+-- Runs AFTER trg_punches_local_datetime (name sorts later) so punched_at is the
+-- final re-anchored IST instant. Identified employees only; NULL/blank emp_id
+-- (unrecognised faces) are never collapsed together.
 CREATE OR REPLACE FUNCTION punches_skip_rapid_repeat() RETURNS trigger AS $$
+DECLARE
+  dev_category  text;
+  dev_cafeteria integer;
+  local_ts      timestamp;
+  local_time    time;
+  local_date    date;
+  slot          record;
+  win_start     timestamptz;
+  win_end       timestamptz;
 BEGIN
-  IF NEW.emp_id IS NOT NULL AND NEW.emp_id <> '' AND EXISTS (
-    SELECT 1 FROM punches
-     WHERE emp_id = NEW.emp_id
-       AND punched_at BETWEEN NEW.punched_at - interval '1 minute'
-                          AND NEW.punched_at + interval '1 minute'
+  IF NEW.emp_id IS NULL OR NEW.emp_id = '' THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT category, cafeteria_id INTO dev_category, dev_cafeteria
+    FROM cafeteria_devices WHERE device_id = NEW.device_id;
+
+  local_ts   := NEW.punched_at AT TIME ZONE 'Asia/Kolkata';
+  local_time := local_ts::time;
+  local_date := local_ts::date;
+
+  -- Lunch / Dinner: one punch per person across the whole slot window, using
+  -- THIS cafeteria's configured slots.
+  IF dev_category = 'lunch_dinner' THEN
+    FOR slot IN
+      SELECT start_time, end_time FROM cafeteria_time_slots
+       WHERE cafeteria_id = dev_cafeteria AND dedup_mode = 'once_per_slot' AND active
+    LOOP
+      IF local_time >= slot.start_time AND local_time <= slot.end_time THEN
+        win_start := (local_date + slot.start_time) AT TIME ZONE 'Asia/Kolkata';
+        win_end   := (local_date + slot.end_time)   AT TIME ZONE 'Asia/Kolkata';
+        IF EXISTS (
+          SELECT 1 FROM punches p
+            JOIN cafeteria_devices d
+              ON d.device_id = p.device_id
+             AND d.category = 'lunch_dinner'
+             AND d.cafeteria_id = dev_cafeteria
+           WHERE p.emp_id = NEW.emp_id
+             AND p.punched_at >= win_start AND p.punched_at <= win_end
+        ) THEN
+          RETURN NULL;        -- already had this meal in this slot today
+        END IF;
+        RETURN NEW;           -- first punch of the slot — keep it
+      END IF;
+    END LOOP;
+  END IF;
+
+  -- Tea / Biscuit / unmapped: drop a repeat by the same person on the same
+  -- device category within 1 minute.
+  IF EXISTS (
+    SELECT 1 FROM punches p
+      LEFT JOIN cafeteria_devices d ON d.device_id = p.device_id
+     WHERE p.emp_id = NEW.emp_id
+       AND COALESCE(d.category, '') = COALESCE(dev_category, '')
+       AND p.punched_at BETWEEN NEW.punched_at - interval '1 minute'
+                            AND NEW.punched_at + interval '1 minute'
   ) THEN
-    RETURN NULL;          -- already counted within the last minute; skip
+    RETURN NULL;
   END IF;
   RETURN NEW;
 END;
@@ -163,6 +214,10 @@ CREATE INDEX IF NOT EXISTS idx_punches_punch_date ON punches (punch_date);
 CREATE INDEX IF NOT EXISTS idx_punches_emp        ON punches (emp_id);
 CREATE INDEX IF NOT EXISTS idx_punches_device     ON punches (device_id);
 CREATE INDEX IF NOT EXISTS idx_punches_device_time ON punches (device_id, punched_at DESC);
+-- Speeds the "latest face image for an employee" lookup used across reports.
+CREATE INDEX IF NOT EXISTS idx_punches_emp_named ON punches (emp_id, punched_at DESC) WHERE person_name IS NOT NULL;
+-- Speeds the per-employee range roll-ups (directory / reports group by emp over a window).
+CREATE INDEX IF NOT EXISTS idx_punches_emp_time ON punches (emp_id, punched_at);
 -- Guard against duplicate identical scans.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_punch ON punches (emp_id, device_id, punched_at);
 
@@ -211,6 +266,146 @@ SELECT v.n, v.s::time, v.e::time
     ('Dinner',    '19:30', '22:30')
   ) AS v(n, s, e)
  WHERE NOT EXISTS (SELECT 1 FROM meal_slots);
+
+-- ============================================================
+--  Cafeterias, their devices, and per-cafeteria meal windows.
+--    A "meal" is one face scan on a device. Every device belongs to exactly
+--    one cafeteria AND one fixed meal category (lunch_dinner | tea | biscuits) —
+--    e.g. the screenshot's "Tea: 121 & 122" is two device rows, same category.
+--    Reports roll punches up by joining punches.device_id -> devices; the devices
+--    table is tiny (dozens of rows) so Postgres keeps it cached and the join is
+--    effectively free. Supersedes the time-only meal_slots concept above.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cafeterias (
+  id         SERIAL      PRIMARY KEY,
+  name       TEXT        NOT NULL UNIQUE,      -- e.g. "F61"
+  active     BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Maps a raw Device ID (from the punch feed) to its cafeteria + meal category.
+-- NB: named cafeteria_devices, NOT "devices" — the legacy heal block above drops
+-- a table literally called "devices" on every boot, which would wipe this one.
+CREATE TABLE IF NOT EXISTS cafeteria_devices (
+  device_id    TEXT    PRIMARY KEY,            -- raw "Device ID" on the punch (e.g. "121")
+  cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id) ON DELETE CASCADE,
+  category     TEXT    NOT NULL CHECK (category IN ('lunch_dinner','tea','biscuits')),
+  label        TEXT,                           -- optional human label
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cafe_devices_cafeteria ON cafeteria_devices (cafeteria_id);
+CREATE INDEX IF NOT EXISTS idx_cafe_devices_category  ON cafeteria_devices (category);
+
+-- The previous "per-category meal window" table is replaced by cafeteria_time_slots
+-- below. Drop it if an earlier version created it.
+DROP TABLE IF EXISTS cafeteria_meal_windows;
+
+-- Per-cafeteria meal time-slots. Each cafeteria has its own editable slots; they
+-- all start from the same defaults (seeded by seed_cafeteria_time_slots) but can
+-- be tuned per cafeteria from the UI.
+--   dedup_mode 'once_per_slot' (Lunch / Dinner): one meal per person across the
+--     WHOLE window, per calendar day.
+--   dedup_mode '1min' (Tea / Snack): repeat within 1 minute is dropped. The late
+--     Tea/Snack slot (e.g. 23:01–11:29) crosses midnight; because counts are by
+--     IST calendar day and this is a 1-minute guard, the count resets next day.
+CREATE TABLE IF NOT EXISTS cafeteria_time_slots (
+  id           SERIAL  PRIMARY KEY,
+  cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id) ON DELETE CASCADE,
+  meal         TEXT    NOT NULL,                  -- 'Lunch' | 'Dinner' | 'Tea/Snack'
+  start_time   TIME    NOT NULL,
+  end_time     TIME    NOT NULL,
+  dedup_mode   TEXT    NOT NULL CHECK (dedup_mode IN ('once_per_slot','1min')),
+  sort         INTEGER NOT NULL DEFAULT 0,
+  active       BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_cafe_slots_cafeteria ON cafeteria_time_slots (cafeteria_id);
+-- Speeds the punch_meals Lunch/Dinner slot resolution (filtered per cafeteria + mode).
+CREATE INDEX IF NOT EXISTS idx_cafe_slots_lookup ON cafeteria_time_slots (cafeteria_id, dedup_mode);
+
+-- Seed the default slot set for one cafeteria (idempotent per cafeteria).
+CREATE OR REPLACE FUNCTION seed_cafeteria_time_slots(p_cafeteria integer) RETURNS void AS $$
+  INSERT INTO cafeteria_time_slots (cafeteria_id, meal, start_time, end_time, dedup_mode, sort)
+  SELECT p_cafeteria, v.meal, v.s::time, v.e::time, v.mode, v.sort
+    FROM (VALUES
+      ('Lunch',     '11:30','15:00','once_per_slot', 1),
+      ('Tea/Snack', '15:01','19:30','1min',          2),
+      ('Dinner',    '20:00','23:00','once_per_slot', 3),
+      ('Tea/Snack', '23:01','11:29','1min',          4)
+    ) AS v(meal, s, e, mode, sort)
+   WHERE NOT EXISTS (SELECT 1 FROM cafeteria_time_slots WHERE cafeteria_id = p_cafeteria);
+$$ LANGUAGE sql;
+
+-- Seed the four cafeterias from the configuration sheet, with their devices and
+-- default slots. Idempotent: only runs when no cafeteria exists yet, so edits/
+-- additions made later from the UI are never clobbered.
+DO $$
+DECLARE
+  cfg     jsonb := '[
+    {"name":"F61","lunch_dinner":["111"],"tea":["121","122"],"biscuits":["141"]},
+    {"name":"F6", "lunch_dinner":["112"],"tea":["123","124"],"biscuits":["142"]},
+    {"name":"F7", "lunch_dinner":["113"],"tea":["125","126"],"biscuits":["143"]},
+    {"name":"G15","lunch_dinner":["114"],"tea":["127","128"],"biscuits":["144"]}
+  ]'::jsonb;
+  c       jsonb;
+  cid     integer;
+  cat     text;
+  dev     text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM cafeterias) THEN RETURN; END IF;
+  FOR c IN SELECT * FROM jsonb_array_elements(cfg) LOOP
+    INSERT INTO cafeterias (name) VALUES (c->>'name') RETURNING id INTO cid;
+    FOREACH cat IN ARRAY ARRAY['lunch_dinner','tea','biscuits'] LOOP
+      FOR dev IN SELECT jsonb_array_elements_text(c->cat) LOOP
+        INSERT INTO cafeteria_devices (device_id, cafeteria_id, category) VALUES (dev, cid, cat)
+          ON CONFLICT (device_id) DO NOTHING;
+      END LOOP;
+    END LOOP;
+    PERFORM seed_cafeteria_time_slots(cid);
+  END LOOP;
+END $$;
+
+-- Backfill default slots for any cafeteria that has none yet (e.g. created before
+-- this feature existed).
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT id FROM cafeterias c
+            WHERE NOT EXISTS (SELECT 1 FROM cafeteria_time_slots s WHERE s.cafeteria_id = c.id)
+  LOOP
+    PERFORM seed_cafeteria_time_slots(r.id);
+  END LOOP;
+END $$;
+
+-- Classified punch view: every scan tagged with its cafeteria and meal. Meal is
+-- derived from the device category — Tea / Biscuit are fixed by the device, while
+-- a Lunch/Dinner device's scan is Lunch or Dinner depending on which once_per_slot
+-- window (for THAT cafeteria) the local time falls in. Unmapped devices -> NULLs.
+-- The dashboard reads cafeteria-wise / meal-wise figures straight off this view.
+-- Dropped first: CREATE OR REPLACE VIEW cannot add/reorder columns in the middle
+-- of an existing view, so a plain replace fails once the column set changes.
+DROP VIEW IF EXISTS punch_meals;
+CREATE VIEW punch_meals AS
+SELECT
+  p.id, p.emp_id, p.person_name, p.device_id, p.punched_at, p.punch_date,
+  d.cafeteria_id,
+  c.name     AS cafeteria_name,
+  d.category AS device_category,
+  CASE
+    WHEN d.category = 'tea'      THEN 'Tea'
+    WHEN d.category = 'biscuits' THEN 'Biscuit'
+    WHEN d.category = 'lunch_dinner' THEN (
+      SELECT s.meal FROM cafeteria_time_slots s
+       WHERE s.cafeteria_id = d.cafeteria_id
+         AND s.dedup_mode = 'once_per_slot'
+         AND s.active
+         AND (p.punched_at AT TIME ZONE 'Asia/Kolkata')::time
+             BETWEEN s.start_time AND s.end_time
+       ORDER BY s.sort
+       LIMIT 1)
+  END AS meal
+FROM punches p
+LEFT JOIN cafeteria_devices d ON d.device_id = p.device_id
+LEFT JOIN cafeterias c        ON c.id = d.cafeteria_id;
 
 -- ============================================================
 --  Auth & access control (RBAC)
@@ -266,6 +461,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_at      ON audit_log (at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_user    ON audit_log (user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_action  ON audit_log (action);
 CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log (session_id);
+
+-- Per-user cafeteria access. super_admin / admin implicitly see ALL cafeterias
+-- (no rows here). hr_manager / canteen_manager are restricted to the cafeterias
+-- assigned here; the API scopes every cafeteria-wise figure to this set.
+CREATE TABLE IF NOT EXISTS user_cafeterias (
+  user_id      BIGINT  NOT NULL REFERENCES users(id)      ON DELETE CASCADE,
+  cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, cafeteria_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_cafeterias_user ON user_cafeterias (user_id);
 
 -- ============================================================
 --  Row-Level Security — defense in depth UNDER the API RBAC.

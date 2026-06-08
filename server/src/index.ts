@@ -9,6 +9,7 @@ import fs from "node:fs";
 import { sniffImageType } from "./photos.js";
 import { resolveFacePath } from "./facesFs.js";
 import { authRouter } from "./auth-routes.js";
+import { cafeteriasRouter } from "./cafeterias-routes.js";
 import { requireAuth, requireRole, seedSuperAdmin } from "./auth.js";
 
 const app = express();
@@ -68,6 +69,9 @@ app.get("/api/health", async (_req, res) => {
 // 🔒 Everything below this line requires a valid session token.
 app.use("/api", requireAuth);
 
+// Cafeteria / device / meal-window management (admin + super admin; guarded per-route).
+app.use("/api", cafeteriasRouter);
+
 // Resolve the time range from query (?range=... &from=YYYY-MM-DD &to=YYYY-MM-DD).
 const rng = (req: express.Request) =>
   resolveRange(
@@ -88,22 +92,33 @@ const fail = (res: express.Response, e: unknown) => {
 const STAFF = requireRole("super_admin", "admin", "hr_manager");
 
 // ---- Dashboard (consumption monitoring — counts only) ----
+// Optional ?cafeteria=<id> scopes every figure to that cafeteria's devices.
 app.get("/api/dashboard", STAFF, async (req, res) => {
   try {
     const r = rng(req);
+    const cafe = cafeOf(req);
+    const meal = mealOf(req);
+    const eff = effectiveCafes(req, cafe);
     const today = todayWindow();
-    const [s, todayS, tr, devices, topEmp, slots, hrs] = await Promise.all([
-      Q.summary(r.from, r.to),
-      Q.summary(today.from, today.to),
-      Q.trend(r.from, r.to),
-      Q.byDevice(r.from, r.to),
-      Q.byEmployee(r.from, r.to, 12),
-      Q.bySlot(r.from, r.to),
-      Q.hourly(today.from, today.to),
+    const [s, todayS, tr, devices, topEmp, meals, byCafe, cafeterias, hrs] = await Promise.all([
+      Q.summaryC(r.from, r.to, eff, meal),                // KPIs scope to meal
+      Q.summaryC(today.from, today.to, eff, meal),
+      Q.trendC(r.from, r.to, eff),                        // trend returns all meal columns
+      Q.byDeviceC(r.from, r.to, eff, meal),
+      Q.byEmployeeC(r.from, r.to, eff, 12, meal),
+      Q.byMeal(r.from, r.to, eff),                        // breakdown — always all meals
+      Q.byCafeteria(r.from, r.to, eff, meal),
+      Q.cafeteriasList(allowedCafes(req)),
+      Q.hourlyC(today.from, today.to, eff, meal),
     ]);
     const days = Math.max(1, tr.length);
     ok(res, {
       range: r.key,
+      from: r.from,
+      to: r.to,
+      cafeteria: cafe,
+      meal,
+      cafeterias,
       totals: { meals: s.meals },
       uniqueEmployees: s.employees,
       activeDevices: devices.filter((d) => d.meals > 0).length,
@@ -112,7 +127,8 @@ app.get("/api/dashboard", STAFF, async (req, res) => {
       trend: tr,
       devices,
       topEmployees: topEmp,
-      slots,
+      meals,
+      byCafeteria: byCafe,
       hourly: hrs,
     });
   } catch (e) {
@@ -120,53 +136,82 @@ app.get("/api/dashboard", STAFF, async (req, res) => {
   }
 });
 
-// ---- Live display: last N faces ----
+// ---- Live display / dashboard feed: last N faces (optional meal/cafeteria filter) ----
 app.get("/api/recent-faces", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit ?? 10), 50);
-    ok(res, await Q.recentFaces(limit));
+    const eff = effectiveCafes(req, cafeOf(req));
+    // Optional date-range scoping (from/to) so the dashboard "Recent" honors the
+    // date picker; omitted -> latest overall (used by the live kiosk display).
+    const useRange = req.query.range || req.query.from || req.query.to;
+    const r = useRange ? rng(req) : null;
+    ok(res, await Q.recentFaces(limit, eff, mealOf(req), r?.from ?? null, r?.to ?? null));
   } catch (e) {
     fail(res, e);
   }
 });
 
-// ---- Employee directory / search ----
+// Cafeteria list for the live-display / filter selectors (available to canteen
+// managers too, so NOT behind the STAFF guard). Scoped to the user's access.
+app.get("/api/live/cafeterias", async (req, res) => {
+  try {
+    ok(res, await Q.cafeteriasList(allowedCafes(req)));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Live meal counter — resets per time slot (see Q.liveMealCount). Reflects the
+// dedup rules automatically (only counted punches exist in punch_meals).
+app.get("/api/live/count", async (req, res) => {
+  try {
+    const requested = cafeOf(req);
+    const eff = effectiveCafes(req, requested);
+    const allowed = allowedCafes(req);
+    // Focused cafeteria for active-slot logic: the requested one (if allowed), or
+    // the sole assigned cafeteria for a single-cafeteria manager.
+    let activeCafe = requested != null && (allowed === null || allowed.includes(requested)) ? requested : null;
+    if (activeCafe == null && allowed && allowed.length === 1) activeCafe = allowed[0];
+    ok(res, await Q.liveMealCount(eff, activeCafe, mealOf(req)));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Resolve an optional ?cafeteria=<id> filter.
+const cafeOf = (req: express.Request) => (req.query.cafeteria ? Number(req.query.cafeteria) : null);
+const mealOf = (req: express.Request) => (req.query.meal ? String(req.query.meal) : null);
+
+// The cafeterias this user is allowed to see (null = ALL, super_admin/admin).
+const allowedCafes = (req: express.Request): number[] | null => req.user?.cafeterias ?? null;
+
+// Effective cafeteria filter for a query: the user's allowed set intersected with
+// any requested ?cafeteria. null = all; [] = nothing (denied / unassigned).
+const effectiveCafes = (req: express.Request, requested: number | null): number[] | null => {
+  const allowed = allowedCafes(req);
+  if (allowed === null) return requested != null ? [requested] : null;
+  if (requested != null) return allowed.includes(requested) ? [requested] : [];
+  return allowed; // may be [] -> sees nothing
+};
+
+// ---- Employee directory / search (optional cafeteria scope) ----
 app.get("/api/employees", STAFF, async (req, res) => {
   try {
     const r = rng(req);
     const search = String(req.query.search ?? "").trim();
     const limit = Math.min(Number(req.query.limit ?? 50), 500);
-    const offset = Number(req.query.offset ?? 0);
-    if (search) {
-      const rows = await query(
-        `SELECT p.emp_id,
-                max(p.person_name) AS name,
-                count(*) FILTER (WHERE p.punched_at >= $2 AND p.punched_at < $3)::int AS meals,
-                max(p.punched_at) FILTER (WHERE p.punched_at >= $2 AND p.punched_at < $3) AS last_seen,
-                (SELECT x.id FROM punches x
-                  WHERE x.emp_id = p.emp_id AND x.person_name IS NOT NULL
-                  ORDER BY x.punched_at DESC LIMIT 1) AS image_id
-           FROM punches p
-          WHERE p.emp_id IS NOT NULL AND p.emp_id <> ''
-            AND (p.emp_id ILIKE $1 OR p.person_name ILIKE $1)
-          GROUP BY p.emp_id
-          ORDER BY meals DESC, name
-          LIMIT $4`,
-        [`%${search}%`, r.from, r.to, limit]
-      );
-      return ok(res, rows);
-    }
-    ok(res, await Q.byEmployee(r.from, r.to, limit, offset));
+    ok(res, await Q.employeesDirectory(r.from, r.to, search, effectiveCafes(req, cafeOf(req)), mealOf(req), limit));
   } catch (e) {
     fail(res, e);
   }
 });
 
 // ---- Reports (counts only, for audit / dispute reference) ----
+// Device report splits the shared Lunch/Dinner device by meal (time slot).
 app.get("/api/reports/device", STAFF, async (req, res) => {
   try {
     const r = rng(req);
-    const rows = await Q.byDevice(r.from, r.to);
+    const rows = await Q.byDeviceMeal(r.from, r.to, effectiveCafes(req, cafeOf(req)), mealOf(req));
     const totalMeals = rows.reduce((a, c) => a + c.meals, 0);
     ok(res, { range: r.key, from: r.from, to: r.to, rows, totalMeals });
   } catch (e) {
@@ -177,7 +222,7 @@ app.get("/api/reports/device", STAFF, async (req, res) => {
 app.get("/api/reports/employees", STAFF, async (req, res) => {
   try {
     const r = rng(req);
-    const rows = await Q.byEmployee(r.from, r.to, 100000);
+    const rows = await Q.employeesReportC(r.from, r.to, effectiveCafes(req, cafeOf(req)), mealOf(req));
     const totalMeals = rows.reduce((a, e) => a + e.meals, 0);
     ok(res, { range: r.key, rows, totalMeals });
   } catch (e) {
@@ -188,9 +233,13 @@ app.get("/api/reports/employees", STAFF, async (req, res) => {
 app.get("/api/reports/employee/:empId", STAFF, async (req, res) => {
   try {
     const r = rng(req);
-    const { emp, punches } = await Q.employeeReport(req.params.empId, r.from, r.to);
+    // KPI tiles scope to the viewer's allowed ∩ selected cafeteria; punch list +
+    // total additionally scope to the selected meal.
+    const { emp, kpi, punches } = await Q.employeeReportC(
+      req.params.empId, r.from, r.to, effectiveCafes(req, cafeOf(req)), mealOf(req)
+    );
     if (!emp) return res.status(404).json({ ok: false, error: "Employee not found" });
-    ok(res, { emp, range: r.key, punches, totalMeals: punches.length });
+    ok(res, { emp, range: r.key, kpi, punches, totalMeals: punches.length });
   } catch (e) {
     fail(res, e);
   }
