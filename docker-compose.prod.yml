@@ -1,0 +1,29 @@
+# Prod-only overrides — TLS termination in the web container.
+#
+# Local dev never loads this file, so `docker compose up` stays plain-HTTP on 8080.
+# On prod, activate it once by adding this line to the prod .env:
+#
+#     COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+#
+# After that the usual deploy command picks up both files automatically:
+#
+#     git pull && docker compose up -d --build
+#
+# Cert files are NOT in git. Place them on the host before the first SSL deploy:
+#     <CERTS_DIR_HOST>/fullchain.crt   (server cert + intermediate CA chain)
+#     <CERTS_DIR_HOST>/server.key      (private key, chmod 600)
+# nginx will fail to start if either is missing.
+
+services:
+  web:
+    volumes:
+      # Swap the HTTP-only server config for the TLS one (both live in the repo).
+      - ./web/nginx.ssl.conf:/etc/nginx/conf.d/default.conf:ro
+      # Corporate-CA cert + key, read-only. Default host dir matches the /faces
+      # convention (/data/cafeteria/...). Override with CERTS_DIR_HOST in .env.
+      - ${CERTS_DIR_HOST:-/data/cafeteria/certs}:/etc/nginx/certs:ro
+    # Replace the base 8080:80 mapping with standard 80 (redirect) + 443 (TLS).
+    # !override requires Docker Compose v2.24+; otherwise 8080:80 would also persist.
+    ports: !override
+      - "80:80"
+      - "443:443"

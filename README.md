@@ -69,6 +69,43 @@ docker compose down -v           # stop AND wipe the database/photos volumes
 > password or JWT secret, set `JWT_SECRET` / `SUPER_ADMIN_PASSWORD` in a root
 > `.env` before `up`.
 
+#### Enabling HTTPS on prod (port 443)
+
+The base compose runs plain HTTP on 8080 (right for local dev). On the prod
+server, `docker-compose.prod.yml` adds TLS: it serves HTTPS on **443**, redirects
+**80 → 443**, and terminates TLS in the `web` (nginx) container. It expects a
+**corporate-CA certificate** (internal hostname); cert files are never committed.
+
+One-time setup on the prod host:
+
+1. **Place the cert files** in the cert dir (default `/data/cafeteria/certs`):
+   ```bash
+   sudo mkdir -p /data/cafeteria/certs
+   # fullchain.crt = your server cert FOLLOWED BY the intermediate CA chain:
+   sudo cp server.crt intermediate.crt /tmp/
+   cat /tmp/server.crt /tmp/intermediate.crt | sudo tee /data/cafeteria/certs/fullchain.crt > /dev/null
+   sudo cp server.key /data/cafeteria/certs/server.key
+   sudo chmod 600 /data/cafeteria/certs/server.key
+   ```
+2. **Activate the override** by adding to the prod `.env` (so the deploy command
+   stays unchanged):
+   ```
+   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+   CERTS_DIR_HOST=/data/cafeteria/certs   # only if not the default
+   ```
+3. **Deploy** as usual, then verify:
+   ```bash
+   git pull && docker compose up -d --build
+   docker compose exec web nginx -t        # cert/config sanity check
+   curl -I http://<host>                    # expect 301 -> https
+   curl -I https://<host>                    # expect 200
+   ```
+
+> Open **443** (and **80** for the redirect) on the server/VLAN firewall. nginx
+> refuses to start if either cert file is missing or the key doesn't match the
+> cert. To rotate certs later, replace the files and `docker compose restart web`.
+> `!override` on the `ports:` needs Docker Compose v2.24+ (`docker compose version`).
+
 ### Option B — Local dev (hot reload)
 
 Requirements: Node 20+ and a local PostgreSQL 18.
