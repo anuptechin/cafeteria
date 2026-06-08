@@ -146,16 +146,35 @@ DECLARE
   win_start     timestamptz;
   win_end       timestamptz;
 BEGIN
-  IF NEW.emp_id IS NULL OR NEW.emp_id = '' THEN
-    RETURN NEW;
-  END IF;
+  local_ts   := NEW.punched_at AT TIME ZONE 'Asia/Kolkata';
+  local_time := local_ts::time;
+  local_date := local_ts::date;
 
   SELECT category, cafeteria_id INTO dev_category, dev_cafeteria
     FROM cafeteria_devices WHERE device_id = NEW.device_id;
 
-  local_ts   := NEW.punched_at AT TIME ZONE 'Asia/Kolkata';
-  local_time := local_ts::time;
-  local_date := local_ts::date;
+  -- Off-timeline guard: a scan on a MAPPED device that falls OUTSIDE this
+  -- cafeteria's valid meal windows is ignored entirely (not recorded). A
+  -- Lunch/Dinner device is valid only inside a once_per_slot window; a Tea/
+  -- Biscuit device only inside a Tea/Snack window. Windows may wrap midnight.
+  IF dev_category IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM cafeteria_time_slots s
+       WHERE s.cafeteria_id = dev_cafeteria AND s.active
+         AND (CASE WHEN dev_category = 'lunch_dinner'
+                   THEN s.dedup_mode = 'once_per_slot'
+                   ELSE s.meal = 'Tea/Snack' END)
+         AND ((s.start_time <= s.end_time AND local_time BETWEEN s.start_time AND s.end_time)
+           OR (s.start_time >  s.end_time AND (local_time >= s.start_time OR local_time <= s.end_time)))
+    ) THEN
+      RETURN NULL;     -- outside any valid meal window for this device → drop
+    END IF;
+  END IF;
+
+  -- De-duplication below applies to identified employees only.
+  IF NEW.emp_id IS NULL OR NEW.emp_id = '' THEN
+    RETURN NEW;
+  END IF;
 
   -- Lunch / Dinner: one punch per person across the whole slot window, using
   -- THIS cafeteria's configured slots.
