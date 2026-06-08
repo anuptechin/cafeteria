@@ -126,6 +126,32 @@ CREATE OR REPLACE TRIGGER trg_punches_dedup
   BEFORE INSERT ON punches
   FOR EACH ROW EXECUTE FUNCTION punches_skip_duplicate();
 
+-- Accidental double-tap guard. A meal is one event: if the same employee is
+-- scanned again within 1 minute (reader double-fired, or they tapped repeatedly
+-- by mistake), those extra scans are NOT separate meals. Skip the insert silently
+-- so counts reflect one meal per person per minute. This trigger's name sorts
+-- AFTER trg_punches_local_datetime, so it runs once punched_at is the final
+-- re-anchored IST instant — compared apples-to-apples against stored rows.
+-- Identified employees only; NULL/blank emp_id (unrecognised faces) are never
+-- collapsed together.
+CREATE OR REPLACE FUNCTION punches_skip_rapid_repeat() RETURNS trigger AS $$
+BEGIN
+  IF NEW.emp_id IS NOT NULL AND NEW.emp_id <> '' AND EXISTS (
+    SELECT 1 FROM punches
+     WHERE emp_id = NEW.emp_id
+       AND punched_at BETWEEN NEW.punched_at - interval '1 minute'
+                          AND NEW.punched_at + interval '1 minute'
+  ) THEN
+    RETURN NULL;          -- already counted within the last minute; skip
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_punches_window_dedup
+  BEFORE INSERT ON punches
+  FOR EACH ROW EXECUTE FUNCTION punches_skip_rapid_repeat();
+
 -- Backfill any rows that predate the columns/trigger.
 UPDATE punches
    SET punch_date = (punched_at AT TIME ZONE 'Asia/Kolkata')::date,
