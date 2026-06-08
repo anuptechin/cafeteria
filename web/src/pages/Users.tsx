@@ -23,8 +23,8 @@ export function Users() {
         <h1 className="text-2xl font-bold tracking-tight">Users & Access</h1>
         <p className="mt-0.5 text-sm text-ink-secondary">
           {me.role === "super_admin"
-            ? "Create and manage admins and managers. The super admin can never be removed."
-            : "Create and manage managers. Admins and the super admin are managed by the super admin."}
+            ? "Create and manage admins, HR managers and canteen managers. The super admin can never be removed."
+            : "Create and manage HR managers and canteen managers. Admins and the super admin are managed by the super admin."}
         </p>
       </header>
 
@@ -53,6 +53,8 @@ function RoleBadge({ role }: { role: Role }) {
       ? "bg-black text-white"
       : role === "admin"
       ? "bg-black/[0.06] text-ink-secondary"
+      : role === "hr_manager"
+      ? "bg-success/10 text-success"
       : "bg-alert/10 text-alert";
   return (
     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${tone}`}>
@@ -67,13 +69,13 @@ function CreateUser({ actorRole, onCreated }: { actorRole: Role; onCreated: () =
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>(roleOptions[0] ?? "manager");
+  const [role, setRole] = useState<Role>(roleOptions[0] ?? "canteen_manager");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const valid = name.trim() && username.trim() && STRONG.test(password) && roleOptions.includes(role);
 
   function close() {
-    setName(""); setUsername(""); setPassword(""); setRole(roleOptions[0] ?? "manager");
+    setName(""); setUsername(""); setPassword(""); setRole(roleOptions[0] ?? "canteen_manager");
     setErr(null); setBusy(false); setOpen(false);
   }
 
@@ -134,8 +136,10 @@ function CreateUser({ actorRole, onCreated }: { actorRole: Role; onCreated: () =
           </div>
 
           <div className="rounded-xl border bg-surface-bege px-3.5 py-2.5 text-xs text-ink-secondary">
-            {role === "manager"
-              ? "Managers can use the Live Display and Reports only."
+            {role === "canteen_manager"
+              ? "Canteen managers see the Live Display only — they sign in straight into it."
+              : role === "hr_manager"
+              ? "HR managers have full access except User Management and the audit log."
               : "Admins have full access except the audit log."}
           </div>
 

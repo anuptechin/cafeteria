@@ -19,10 +19,10 @@ type Route =
   | "users";
 
 const NAV: { key: Route; label: string; icon: JSX.Element; roles: Role[] }[] = [
-  { key: "dashboard", label: "Dashboard", icon: <IconGrid />, roles: ["super_admin", "admin"] },
-  { key: "display", label: "Live Display", icon: <IconScreen />, roles: ["super_admin", "admin", "manager"] },
-  { key: "reports", label: "Reports", icon: <IconDoc />, roles: ["super_admin", "admin", "manager"] },
-  { key: "employees", label: "Employees", icon: <IconUsers />, roles: ["super_admin", "admin"] },
+  { key: "dashboard", label: "Dashboard", icon: <IconGrid />, roles: ["super_admin", "admin", "hr_manager"] },
+  { key: "display", label: "Live Display", icon: <IconScreen />, roles: ["super_admin", "admin", "hr_manager", "canteen_manager"] },
+  { key: "reports", label: "Reports", icon: <IconDoc />, roles: ["super_admin", "admin", "hr_manager"] },
+  { key: "employees", label: "Employees", icon: <IconUsers />, roles: ["super_admin", "admin", "hr_manager"] },
   { key: "users", label: "Users & Access", icon: <IconShieldUser />, roles: ["super_admin", "admin"] },
   { key: "audit", label: "Audit Log", icon: <IconHistory />, roles: ["super_admin"] },
 ];
@@ -79,7 +79,7 @@ function Splash() {
 }
 
 function AppShell() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const role = user!.role;
   const home = allowedRoutes(role)[0] ?? "reports";
   const [route, nav] = useHashRoute(home);
@@ -91,8 +91,11 @@ function AppShell() {
   }, [route, role]);
   if (!canAccess(role, route)) return null;
 
-  // Full-screen mode for the cafeteria TV display.
-  if (route === "display") return <Display onExit={() => nav(home)} />;
+  // Full-screen mode for the cafeteria TV display. Canteen managers have the
+  // display as their only screen, so it's a kiosk: exiting signs them out
+  // rather than returning to a (non-existent) home page.
+  if (route === "display")
+    return <Display onExit={role === "canteen_manager" ? logout : () => nav(home)} />;
 
   return (
     <div className="flex min-h-screen bg-surface-bege text-ink">

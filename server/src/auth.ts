@@ -5,13 +5,13 @@ import crypto from "node:crypto";
 import { env } from "./env.js";
 import { query, withActor } from "./db.js";
 
-export type Role = "super_admin" | "admin" | "manager";
+export type Role = "super_admin" | "admin" | "hr_manager" | "canteen_manager";
 
 // ---- central RBAC policy (single source of truth) ----
 // Which roles a creator is allowed to mint.
 export function creatableRoles(actor: Role): Role[] {
-  if (actor === "super_admin") return ["admin", "manager"];
-  if (actor === "admin") return ["manager"];
+  if (actor === "super_admin") return ["admin", "hr_manager", "canteen_manager"];
+  if (actor === "admin") return ["hr_manager", "canteen_manager"];
   return [];
 }
 
@@ -20,7 +20,8 @@ export function creatableRoles(actor: Role): Role[] {
 export function canManageTarget(actor: Role, target: Role): boolean {
   if (target === "super_admin") return false;
   if (target === "admin") return actor === "super_admin";
-  if (target === "manager") return actor === "super_admin" || actor === "admin";
+  if (target === "hr_manager" || target === "canteen_manager")
+    return actor === "super_admin" || actor === "admin";
   return false;
 }
 

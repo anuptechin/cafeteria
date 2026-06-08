@@ -62,25 +62,27 @@ async function sendJSON<T = any>(url: string, method: string, body?: unknown): P
 }
 
 // ---- auth / RBAC types ----
-export type Role = "super_admin" | "admin" | "manager";
+export type Role = "super_admin" | "admin" | "hr_manager" | "canteen_manager";
 export type AuthedUser = { id: number; username: string; name: string; role: Role };
 
 export const ROLE_LABEL: Record<Role, string> = {
   super_admin: "Super Admin",
   admin: "Admin",
-  manager: "Manager",
+  hr_manager: "HR Manager",
+  canteen_manager: "Canteen Manager",
 };
 
 // Client mirror of the server RBAC policy (server remains the enforcer).
 export function creatableRoles(actor: Role): Role[] {
-  if (actor === "super_admin") return ["admin", "manager"];
-  if (actor === "admin") return ["manager"];
+  if (actor === "super_admin") return ["admin", "hr_manager", "canteen_manager"];
+  if (actor === "admin") return ["hr_manager", "canteen_manager"];
   return [];
 }
 export function canManageTarget(actor: Role, target: Role): boolean {
   if (target === "super_admin") return false;
   if (target === "admin") return actor === "super_admin";
-  if (target === "manager") return actor === "super_admin" || actor === "admin";
+  if (target === "hr_manager" || target === "canteen_manager")
+    return actor === "super_admin" || actor === "admin";
   return false;
 }
 export type ManagedUser = AuthedUser & {

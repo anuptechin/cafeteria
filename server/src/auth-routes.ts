@@ -145,7 +145,7 @@ authRouter.post("/users", requireAuth, requireRole("admin", "super_admin"), asyn
     const username = String(req.body.username ?? "").trim().toLowerCase();
     const name = String(req.body.name ?? "").trim();
     const password = String(req.body.password ?? "");
-    const role = String(req.body.role ?? "manager") as Role;
+    const role = String(req.body.role ?? "canteen_manager") as Role;
     if (!username || !name)
       return res.status(400).json({ ok: false, error: "Name and username are required" });
     if (!STRONG.test(password))

@@ -214,8 +214,10 @@ SELECT v.n, v.s::time, v.e::time
 
 -- ============================================================
 --  Auth & access control (RBAC)
---    role 'super_admin' — reserved, exactly one, can never be deleted.
---    role 'admin'       — full access except deleting/altering the super admin.
+--    role 'super_admin'      — reserved, exactly one, can never be deleted.
+--    role 'admin'            — full access except the audit log.
+--    role 'hr_manager'       — everything except user management + audit log.
+--    role 'canteen_manager'  — live display only (kiosk).
 --  The super admin row is seeded/healed by the API on boot (auth.ts).
 -- ============================================================
 CREATE TABLE IF NOT EXISTS users (
@@ -223,16 +225,23 @@ CREATE TABLE IF NOT EXISTS users (
   username      TEXT        NOT NULL UNIQUE,         -- login id (email)
   name          TEXT        NOT NULL,
   password_hash TEXT        NOT NULL,
-  role          TEXT        NOT NULL CHECK (role IN ('super_admin','admin','manager')),
+  role          TEXT        NOT NULL CHECK (role IN ('super_admin','admin','hr_manager','canteen_manager')),
   active        BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by    TEXT,                                -- username of creator
   last_login_at TIMESTAMPTZ
 );
 
--- Heal the role CHECK on databases created before 'manager' existed (idempotent).
+-- Heal the role set on pre-existing databases (idempotent). The legacy single
+-- 'manager' role is migrated to 'canteen_manager' (live-display-only). The
+-- UPDATE runs in the 'system' RLS context so it bypasses the users policies and
+-- the role-change guard trigger that already exist from a prior run.
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE users ADD  CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','manager'));
+SELECT set_config('app.actor_role', 'system', false);
+UPDATE users SET role = 'canteen_manager' WHERE role = 'manager';
+SELECT set_config('app.actor_role', '', false);
+ALTER TABLE users ADD  CONSTRAINT users_role_check
+  CHECK (role IN ('super_admin','admin','hr_manager','canteen_manager'));
 
 -- At most one super admin, enforced at the database level.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_single_super_admin
@@ -310,24 +319,26 @@ CREATE POLICY users_self_upd ON users FOR UPDATE
 CREATE POLICY users_super_sel ON users FOR SELECT
   USING (current_setting('app.actor_role', true) = 'super_admin');
 CREATE POLICY users_super_ins ON users FOR INSERT
-  WITH CHECK (current_setting('app.actor_role', true) = 'super_admin' AND role IN ('admin','manager'));
+  WITH CHECK (current_setting('app.actor_role', true) = 'super_admin'
+             AND role IN ('admin','hr_manager','canteen_manager'));
 CREATE POLICY users_super_upd ON users FOR UPDATE
   USING      (current_setting('app.actor_role', true) = 'super_admin' AND role <> 'super_admin')
   WITH CHECK (current_setting('app.actor_role', true) = 'super_admin' AND role <> 'super_admin');
 CREATE POLICY users_super_del ON users FOR DELETE
   USING (current_setting('app.actor_role', true) = 'super_admin' AND role <> 'super_admin');
 
--- admin: only managers (plus own row for SELECT)
+-- admin: only HR + canteen managers (plus own row for SELECT)
 CREATE POLICY users_admin_sel ON users FOR SELECT
   USING (current_setting('app.actor_role', true) = 'admin'
-         AND (role = 'manager' OR id = NULLIF(current_setting('app.actor_id', true), '')::bigint));
+         AND (role IN ('hr_manager','canteen_manager')
+              OR id = NULLIF(current_setting('app.actor_id', true), '')::bigint));
 CREATE POLICY users_admin_ins ON users FOR INSERT
-  WITH CHECK (current_setting('app.actor_role', true) = 'admin' AND role = 'manager');
+  WITH CHECK (current_setting('app.actor_role', true) = 'admin' AND role IN ('hr_manager','canteen_manager'));
 CREATE POLICY users_admin_upd ON users FOR UPDATE
-  USING      (current_setting('app.actor_role', true) = 'admin' AND role = 'manager')
-  WITH CHECK (current_setting('app.actor_role', true) = 'admin' AND role = 'manager');
+  USING      (current_setting('app.actor_role', true) = 'admin' AND role IN ('hr_manager','canteen_manager'))
+  WITH CHECK (current_setting('app.actor_role', true) = 'admin' AND role IN ('hr_manager','canteen_manager'));
 CREATE POLICY users_admin_del ON users FOR DELETE
-  USING (current_setting('app.actor_role', true) = 'admin' AND role = 'manager');
+  USING (current_setting('app.actor_role', true) = 'admin' AND role IN ('hr_manager','canteen_manager'));
 -- (managers match no users policy at all -> zero access to the users table)
 
 -- ---- audit_log ----

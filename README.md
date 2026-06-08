@@ -4,8 +4,8 @@ Real-time cafeteria **monitoring** for the Hikvision face-scan readers across th
 four D'Decor cafeterias (F6 ×2, G15, F7). Each face scan = one meal consumed. The
 app tracks **meal counts only** (who ate, where, when) — no finance/billing.
 
-It ships with a secure auth layer: a single **super admin**, plus **admin** and
-**manager** roles, a beautiful login, a full **audit trail**, and database-level
+It ships with a secure auth layer: a single **super admin**, plus **admin**,
+**HR manager** and **canteen manager** roles, a beautiful login, a full **audit trail**, and database-level
 **Row-Level Security** so the role separation is enforced even at the SQL layer.
 
 ---
@@ -114,8 +114,9 @@ Every signed-in user can change their own password from the sidebar
 | Role | Can access |
 |------|-----------|
 | **Super Admin** (exactly one, undeletable) | Everything, and is the **only** role that can see the **Audit Log** |
-| **Admin** | Everything **except** the Audit Log. Manages **managers** only |
-| **Manager** | **Live Display and Reports only** |
+| **Admin** | Everything **except** the Audit Log. Manages HR/canteen managers |
+| **HR Manager** | Everything **except** User Management **and** the Audit Log |
+| **Canteen Manager** | **Live Display only** — signs in straight into the display (kiosk) |
 
 ### Security model (defense in depth)
 

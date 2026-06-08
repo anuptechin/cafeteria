@@ -82,8 +82,10 @@ const fail = (res: express.Response, e: unknown) => {
   res.status(500).json({ ok: false, error: (e as Error).message });
 };
 
-// Managers are limited to live stream + reports; the dashboard is staff-only.
-const STAFF = requireRole("super_admin", "admin");
+// Canteen managers are limited to the live display only (recent-faces + SSE
+// stream, which just need requireAuth). Everything analytical — dashboard,
+// employee directory and reports — is staff-only (super admin, admin, HR).
+const STAFF = requireRole("super_admin", "admin", "hr_manager");
 
 // ---- Dashboard (consumption monitoring — counts only) ----
 app.get("/api/dashboard", STAFF, async (req, res) => {
@@ -129,7 +131,7 @@ app.get("/api/recent-faces", async (req, res) => {
 });
 
 // ---- Employee directory / search ----
-app.get("/api/employees", async (req, res) => {
+app.get("/api/employees", STAFF, async (req, res) => {
   try {
     const r = rng(req);
     const search = String(req.query.search ?? "").trim();
@@ -161,7 +163,7 @@ app.get("/api/employees", async (req, res) => {
 });
 
 // ---- Reports (counts only, for audit / dispute reference) ----
-app.get("/api/reports/device", async (req, res) => {
+app.get("/api/reports/device", STAFF, async (req, res) => {
   try {
     const r = rng(req);
     const rows = await Q.byDevice(r.from, r.to);
@@ -172,7 +174,7 @@ app.get("/api/reports/device", async (req, res) => {
   }
 });
 
-app.get("/api/reports/employees", async (req, res) => {
+app.get("/api/reports/employees", STAFF, async (req, res) => {
   try {
     const r = rng(req);
     const rows = await Q.byEmployee(r.from, r.to, 100000);
@@ -183,7 +185,7 @@ app.get("/api/reports/employees", async (req, res) => {
   }
 });
 
-app.get("/api/reports/employee/:empId", async (req, res) => {
+app.get("/api/reports/employee/:empId", STAFF, async (req, res) => {
   try {
     const r = rng(req);
     const { emp, punches } = await Q.employeeReport(req.params.empId, r.from, r.to);
