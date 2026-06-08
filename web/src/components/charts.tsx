@@ -232,6 +232,15 @@ const hourLabel = (h: number) => {
   const hr = h % 12 === 0 ? 12 : h % 12;
   return `${hr}${ap}`;
 };
+// "4:00 PM – 5:00 PM" — the full one-hour window a bar represents.
+const hourRange = (h: number) => {
+  const fmt = (x: number) => {
+    const ap = x % 24 < 12 ? "AM" : "PM";
+    const hr = x % 12 === 0 ? 12 : x % 12;
+    return `${hr}:00 ${ap}`;
+  };
+  return `${fmt(h)} – ${fmt(h + 1)}`;
+};
 
 export function HourlyBars({ data, height = 200 }: { data: { hour: number; meals: number }[]; height?: number }) {
   const map = new Map(data.map((d) => [d.hour, d.meals]));
@@ -279,9 +288,11 @@ export function HourlyBars({ data, height = 200 }: { data: { hour: number; meals
                       : "linear-gradient(180deg,#2b2b2b,#000000)",
                   }}
                 />
-                {/* hover tooltip */}
-                <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-black px-2 py-1 text-[10px] text-white shadow-pop group-hover:block">
-                  <span className="font-semibold tnum">{h.meals}</span> · {hourLabel(h.hour)}
+                {/* hover tooltip — count on top, full hour range below */}
+                <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-black px-2.5 py-1.5 text-center text-white shadow-pop group-hover:block">
+                  <div className="tnum text-sm font-bold leading-none">{h.meals.toLocaleString("en-IN")}</div>
+                  <div className="text-[9px] uppercase tracking-wide text-white/60">meal{h.meals === 1 ? "" : "s"}</div>
+                  <div className="mt-0.5 text-[10px] font-medium text-white/85">{hourRange(h.hour)}</div>
                 </div>
                 {/* x label every 3h */}
                 {h.hour % 3 === 0 && (
