@@ -4,7 +4,7 @@ import { Card, RangePicker, Avatar, CardSkeleton, Empty, Modal } from "../compon
 import { count, dateOf, timeOf } from "../lib/format";
 
 export function Employees() {
-  const [range, setRange] = useState<RangeState>({ key: "60d", from: "", to: "" });
+  const [range, setRange] = useState<RangeState>({ key: "month", from: "", to: "" });
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
   const [cafe, setCafe] = useState<number | null>(null);

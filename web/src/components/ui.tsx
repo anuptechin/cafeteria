@@ -127,9 +127,9 @@ export function RangePicker({
 }) {
   const opts = [
     { k: "today", l: "Today" },
-    { k: "7d", l: "7 Days" },
-    { k: "30d", l: "30 Days" },
-    { k: "60d", l: "60 Days" },
+    { k: "week", l: "This Week" },
+    { k: "last3w", l: "Last 3 Weeks" },
+    { k: "month", l: "This Month" },
     { k: "custom", l: "Custom" },
   ];
 

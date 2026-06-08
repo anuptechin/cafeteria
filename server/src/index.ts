@@ -75,7 +75,7 @@ app.use("/api", cafeteriasRouter);
 // Resolve the time range from query (?range=... &from=YYYY-MM-DD &to=YYYY-MM-DD).
 const rng = (req: express.Request) =>
   resolveRange(
-    String(req.query.range ?? "60d"),
+    String(req.query.range ?? "month"),
     req.query.from ? String(req.query.from) : undefined,
     req.query.to ? String(req.query.to) : undefined
   );

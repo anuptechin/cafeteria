@@ -33,7 +33,7 @@ const deviceLabel = (r: { device_id: string; meal: string | null }) =>
 
 export function Reports() {
   const [tab, setTab] = useState<Tab>("device");
-  const [range, setRange] = useState<RangeState>({ key: "60d", from: "", to: "" });
+  const [range, setRange] = useState<RangeState>({ key: "month", from: "", to: "" });
   const [cafe, setCafe] = useState<number | null>(null);
   const cafeterias = useCafeterias();
 

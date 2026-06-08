@@ -24,7 +24,7 @@ type MealKey = (typeof MEALS)[number]["k"];
 const mealOf = (k: MealKey) => MEALS.find((m) => m.k === k)!;
 
 export function Dashboard() {
-  const [range, setRange] = useState<RangeState>({ key: "60d", from: "", to: "" });
+  const [range, setRange] = useState<RangeState>({ key: "month", from: "", to: "" });
   const [cafe, setCafe] = useState<number | null>(null); // null = all cafeterias
   const [meal, setMeal] = useState<MealKey>("all");       // GLOBAL meal filter
   const mealVal = mealOf(meal).val;

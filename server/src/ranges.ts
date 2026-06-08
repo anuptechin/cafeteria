@@ -17,7 +17,24 @@ function parts(d = new Date()) {
 const istMidnight = (y: number, m: number, day: number) =>
   `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00+05:30`;
 
-export type RangeKey = "today" | "7d" | "30d" | "60d" | "custom" | "all";
+// IST midnight of the calendar date that is `n` days before (y,m,day). Uses UTC
+// date arithmetic on the bare components (IST has no DST, so this is exact).
+function istMidnightMinusDays(y: number, m: number, day: number, n: number): string {
+  const d = new Date(Date.UTC(y, m - 1, day) - n * 864e5);
+  return istMidnight(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+}
+
+// Days since Monday for the given date (Mon=0 … Sun=6).
+function daysSinceMonday(y: number, m: number, day: number): number {
+  const dow = new Date(Date.UTC(y, m - 1, day)).getUTCDay(); // 0=Sun … 6=Sat
+  return (dow + 6) % 7;
+}
+
+// today  : since IST midnight today
+// week   : This Week — Monday 00:00 of the current week → now (week is Mon–Sun)
+// last3w : current week plus the previous two weeks (Monday 2 weeks back → now)
+// month  : This Month — 1st of the current month 00:00 → now
+export type RangeKey = "today" | "week" | "last3w" | "month" | "custom" | "all";
 
 export function resolveRange(
   key: string,
@@ -37,20 +54,21 @@ export function resolveRange(
     };
   }
 
-  const k = (["today", "7d", "30d", "60d", "all"].includes(key) ? key : "60d") as RangeKey;
+  const k = (["today", "week", "last3w", "month", "all"].includes(key) ? key : "month") as RangeKey;
+  const mondayOffset = daysSinceMonday(y, m, day);
   let from: string;
   switch (k) {
     case "today":
       from = istMidnight(y, m, day);
       break;
-    case "7d":
-      from = new Date(now.getTime() - 7 * 864e5).toISOString();
+    case "week":
+      from = istMidnightMinusDays(y, m, day, mondayOffset);
       break;
-    case "30d":
-      from = new Date(now.getTime() - 30 * 864e5).toISOString();
+    case "last3w":
+      from = istMidnightMinusDays(y, m, day, mondayOffset + 14);
       break;
-    case "60d":
-      from = new Date(now.getTime() - 60 * 864e5).toISOString();
+    case "month":
+      from = istMidnight(y, m, 1);
       break;
     case "all":
     default:
