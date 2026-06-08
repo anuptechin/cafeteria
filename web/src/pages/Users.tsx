@@ -193,8 +193,8 @@ function CreateUser({ actorRole, cafeterias, onCreated }: { actorRole: Role; caf
             {role === "canteen_manager"
               ? "Canteen managers see the Live Display only — limited to the cafeterias selected above."
               : role === "hr_manager"
-              ? "HR managers have full access except User Management and the audit log — data limited to the cafeterias selected above."
-              : "Admins have full access (all cafeterias) except the audit log."}
+              ? "HR managers have full access except User Management — data limited to the cafeterias selected above."
+              : "Admins have full access (all cafeterias)."}
           </div>
 
           {err && (
