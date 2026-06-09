@@ -134,6 +134,23 @@ export async function byCafeteria(from: string, to: string, cafes: number[] | nu
   );
 }
 
+// Per (cafeteria, meal) counts — powers the dashboard "Location Share" donut where
+// each segment is e.g. "F7 Lunch" (Lunch & Dinner kept separate, not the combined
+// device). Respects the meal filter like the rest of the dashboard.
+export async function byCafeteriaMeal(from: string, to: string, cafes: number[] | null, meal: string | null) {
+  return query<{ cafeteria_name: string; meal: string; meals: number }>(
+    `SELECT cafeteria_name, meal, count(*)::int AS meals
+       FROM punch_meals
+      WHERE punched_at >= $1 AND punched_at < $2
+        AND meal IS NOT NULL AND cafeteria_id IS NOT NULL
+        AND ($3::int[] IS NULL OR cafeteria_id = ANY($3))
+        AND ($4::text IS NULL OR meal = $4)
+      GROUP BY cafeteria_name, meal
+      ORDER BY meals DESC`,
+    [from, to, cafes, meal]
+  );
+}
+
 export async function byMeal(from: string, to: string, cafes: number[] | null, meal: string | null = null) {
   return query<{ meal: string; meals: number }>(
     `SELECT meal, count(*)::int AS meals
@@ -301,16 +318,16 @@ export async function maxPunchId(): Promise<number> {
 
 // ---- meal/cafeteria-aware report queries (over punch_meals) ----
 
-// Device report: one row per (device, meal). The shared Lunch/Dinner device thus
-// appears twice — "113 (Lunch)" and "113 (Dinner)" — split by the time slot.
-export async function byDeviceMeal(from: string, to: string, cafes: number[] | null, meal: string | null) {
+// Location report: one row per (cafeteria, meal) with cost — e.g. "F7 · Lunch",
+// "F7 · Dinner" kept separate (not the combined Lunch/Dinner device). Shows the
+// cafeteria name instead of a raw device id.
+export async function byLocationMeal(from: string, to: string, cafes: number[] | null, meal: string | null) {
   return query<{
-    device_id: string; category: string | null; meal: string | null; meals: number;
+    cafeteria_name: string; meal: string | null; meals: number;
     emp_paid: number; company_paid: number;
   }>(
     `WITH ${PRICE_RANGES}
-     SELECT COALESCE(pm.device_id, '—')        AS device_id,
-            max(pm.device_category)            AS category,
+     SELECT COALESCE(pm.cafeteria_name, 'Unmapped') AS cafeteria_name,
             pm.meal,
             count(*)::int                      AS meals,
             sum(COALESCE(pr.emp_paid, 0))::numeric     AS emp_paid,
@@ -318,10 +335,11 @@ export async function byDeviceMeal(from: string, to: string, cafes: number[] | n
        FROM punch_meals pm
        ${PRICE_JOIN}
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
+        AND pm.cafeteria_id IS NOT NULL
         AND ($3::int[] IS NULL OR pm.cafeteria_id = ANY($3))
         AND ($4::text IS NULL OR pm.meal = $4)
-      GROUP BY pm.device_id, pm.meal
-      ORDER BY pm.device_id, pm.meal NULLS LAST`,
+      GROUP BY pm.cafeteria_name, pm.meal
+      ORDER BY pm.cafeteria_name, pm.meal NULLS LAST`,
     [from, to, cafes, meal]
   );
 }

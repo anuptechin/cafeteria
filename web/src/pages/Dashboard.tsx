@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, usePoll, useLivePunches, type Face, type RangeState } from "../lib/api";
 import { Card, Stat, RangePicker, Avatar, CardSkeleton, Empty } from "../components/ui";
-import { AreaChart, MultiLineChart, Donut, BarList, HourlyBars } from "../components/charts";
+import { AreaChart, MultiLineChart, Donut, GradientBars, HourlyBars } from "../components/charts";
 import { count, dayLabel, timeOf, shortName } from "../lib/format";
 
-const CAFE_COLORS = ["#000000", "#B93E19", "#19B924", "#B99919"];
-
-// Device labels show their meal category in brackets, e.g. "111 (Lunch/Dinner)".
-const CAT_LABEL: Record<string, string> = { lunch_dinner: "Lunch/Dinner", tea: "Tea", biscuits: "Biscuit" };
-const deviceLabel = (d: { device_id: string; category: string | null }) =>
-  d.category ? `${d.device_id} (${CAT_LABEL[d.category] ?? d.category})` : d.device_id;
+// Distinct segment colours for the Location Share donut (cafeteria · meal). Cycled.
+const SHARE_COLORS = [
+  "#B93E19", "#2563EB", "#19B924", "#B99919",
+  "#7C3AED", "#06B6D4", "#E11D48", "#0D9488",
+  "#F59E0B", "#4F46E5", "#DB2777", "#65A30D",
+  "#9333EA", "#0EA5E9", "#EA580C", "#000000",
+];
 
 // Consumption-type filter options shared by the Trend and Recent dropdowns. `col`
 // picks the per-type series out of the trend rows; `val` matches Face.meal for the
@@ -233,51 +234,13 @@ export function Dashboard() {
         )}
       </Card>
 
-      {/* Share + breakdowns — three balanced, equal-height cards. The donut
-          legend scrolls past a cap and the bar lists centre vertically, so all
-          three fill their height cleanly with no leftover gaps. */}
-      <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-3">
-        <Card className="flex flex-col" title={<Hd t="Device Share" s={<FilterSub types={typeCap} cafe={cafeName} note={rl} />} />}>
-          {data ? (
-            data.devices.length ? (
-              <div className="flex flex-1 flex-col items-center">
-                <Donut
-                  size={168}
-                  centerLabel={count(data.totals.meals)}
-                  centerSub="total"
-                  unitWord="total"
-                  segments={data.devices.map((c, i) => ({
-                    value: c.meals,
-                    color: CAFE_COLORS[i % CAFE_COLORS.length],
-                    label: deviceLabel(c),
-                    sub: c.cafeteria_name ?? undefined,
-                  }))}
-                />
-                <div className="mt-4 max-h-44 w-full space-y-1.5 overflow-y-auto pr-1">
-                  {data.devices.map((c, i) => (
-                    <div key={c.device_id} className="flex items-center justify-between text-sm">
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: CAFE_COLORS[i % CAFE_COLORS.length] }} />
-                        <span className="truncate">{deviceLabel(c)}</span>
-                      </span>
-                      <span className="tnum shrink-0 font-semibold">{count(c.meals)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <Empty>No device data.</Empty>
-            )
-          ) : (
-            <CardSkeleton h={320} />
-          )}
-        </Card>
-
+      {/* Cafeteria consumption (gradient bars) + Location share (cafeteria · meal). */}
+      <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">
         <Card className="flex flex-col" title={<Hd t="By Cafeteria" s={<FilterSub types={types} note={rl} />} />}>
           {data ? (
             data.byCafeteria.length ? (
-              <div className="flex flex-1 flex-col justify-center">
-                <BarList items={data.byCafeteria.map((c) => ({ label: c.name, value: c.meals }))} />
+              <div className="flex flex-1 flex-col justify-center pt-2">
+                <GradientBars items={data.byCafeteria.map((c) => ({ label: c.name, value: c.meals }))} height={300} />
               </div>
             ) : (
               <Empty>No data.</Empty>
@@ -287,11 +250,33 @@ export function Dashboard() {
           )}
         </Card>
 
-        <Card className="flex flex-col" title={<Hd t="By Type" s={<FilterSub types={typeCap} cafe={cafeName} note={rl} />} />}>
+        <Card className="flex flex-col" title={<Hd t="Location Share" s={<FilterSub types={types} cafe={cafeName} note={rl} />} />}>
           {data ? (
-            data.meals.length ? (
-              <div className="flex flex-1 flex-col justify-center">
-                <BarList color="#B93E19" items={data.meals.map((m) => ({ label: m.meal, value: m.meals }))} />
+            data.byCafeteriaMeal.length ? (
+              <div className="flex flex-1 flex-col items-center">
+                <Donut
+                  size={184}
+                  centerLabel={count(data.totals.meals)}
+                  centerSub="total"
+                  unitWord="total"
+                  segments={data.byCafeteriaMeal.map((c, i) => ({
+                    value: c.meals,
+                    color: SHARE_COLORS[i % SHARE_COLORS.length],
+                    label: `${c.cafeteria_name} ${c.meal}`,
+                    sub: c.meal,
+                  }))}
+                />
+                <div className="mt-4 max-h-44 w-full space-y-1.5 overflow-y-auto pr-1">
+                  {data.byCafeteriaMeal.map((c, i) => (
+                    <div key={`${c.cafeteria_name}-${c.meal}`} className="flex items-center justify-between text-sm">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: SHARE_COLORS[i % SHARE_COLORS.length] }} />
+                        <span className="truncate">{c.cafeteria_name} <span className="text-ink-secondary">· {c.meal}</span></span>
+                      </span>
+                      <span className="tnum shrink-0 font-semibold">{count(c.meals)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
               <Empty>No data.</Empty>

@@ -89,9 +89,6 @@ function FilterSelect({ value, onChange, children }: { value: string | number; o
   );
 }
 
-const deviceLabel = (r: { device_id: string; meal: string | null }) =>
-  r.meal ? `${r.device_id} (${r.meal})` : r.device_id;
-
 export function Reports() {
   const [tab, setTab] = useState<Tab>("daily");
   const [range, setRange] = useState<RangeState>({ key: "month", from: "", to: "" });
@@ -133,7 +130,7 @@ export function Reports() {
       {pdfOpen && <SettlementDoc range={pdfRange} cafe={cafe} cafeName={cafeName} onClose={() => setPdfOpen(false)} />}
 
       <div className="inline-flex rounded-full border bg-surface-white p-0.5">
-        {([["daily", "Date-wise"], ["device", "Device-wise"], ["employees", "By Employee"], ["lookup", "Employee Lookup"]] as [Tab, string][]).map(([k, l]) => (
+        {([["daily", "Date-wise"], ["device", "Location-wise"], ["employees", "By Employee"], ["lookup", "Employee Lookup"]] as [Tab, string][]).map(([k, l]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
@@ -160,15 +157,15 @@ function DeviceReport({ range, cafe, onCSV }: { range: RangeState; cafe: number 
   const totalCost: MealCost = data.rows.reduce((a: MealCost, r: any) => addCost(a, costOf(r.emp_paid, r.company_paid)), ZERO_COST);
   return (
     <Card
-      title="Device-wise Meals & Cost"
+      title="Location-wise Meals & Cost"
       action={
         <button
           onClick={() =>
-            onCSV(`device_${range.key}.csv`, [
-              ["Device", "Meal", "Total Count", "Employee Paid", "Company Paid", "Total (Vendor)"],
+            onCSV(`location_${range.key}.csv`, [
+              ["Location", "Meal", "Total Count", "Employee Paid", "Company Paid", "Total (Vendor)"],
               ...data.rows.map((r: any) => {
                 const c = costOf(r.emp_paid, r.company_paid);
-                return [r.device_id, r.meal ?? "—", r.meals, c.emp, c.co, c.vendor];
+                return [r.cafeteria_name, r.meal ?? "—", r.meals, c.emp, c.co, c.vendor];
               }),
               ["TOTAL", "", data.totalMeals, totalCost.emp, totalCost.co, totalCost.vendor],
             ])
@@ -189,7 +186,7 @@ function DeviceReport({ range, cafe, onCSV }: { range: RangeState; cafe: number 
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
-              <th className="py-2 font-medium">Device (Meal)</th>
+              <th className="py-2 font-medium">Location (Meal)</th>
               <th className="py-2 text-right font-medium">Total Count</th>
               <th className="py-2 text-right font-medium">Employee Paid</th>
               <th className="py-2 text-right font-medium">Company Paid</th>
@@ -200,9 +197,9 @@ function DeviceReport({ range, cafe, onCSV }: { range: RangeState; cafe: number 
             {data.rows.map((r: any) => {
               const c = costOf(r.emp_paid, r.company_paid);
               return (
-                <tr key={`${r.device_id}-${r.meal ?? "none"}`} className="border-b border-black/5 hover:bg-black/[0.02]">
+                <tr key={`${r.cafeteria_name}-${r.meal ?? "none"}`} className="border-b border-black/5 hover:bg-black/[0.02]">
                   <td className="py-2.5 font-medium">
-                    {r.device_id}
+                    {r.cafeteria_name}
                     {r.meal && <span className="ml-1.5 rounded bg-black/5 px-1.5 py-0.5 text-xs font-semibold text-ink-secondary">{r.meal}</span>}
                   </td>
                   <td className="py-2.5 text-right tnum font-semibold">{count(r.meals)}</td>

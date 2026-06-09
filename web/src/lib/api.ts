@@ -18,6 +18,7 @@ export type DashboardData = {
   topEmployees: { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null }[];
   meals: { meal: string; meals: number }[];
   byCafeteria: { name: string; meals: number }[];
+  byCafeteriaMeal: { cafeteria_name: string; meal: string; meals: number }[];
   hourly: { hour: number; meals: number }[];
 };
 

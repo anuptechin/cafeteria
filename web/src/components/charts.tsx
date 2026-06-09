@@ -350,6 +350,82 @@ export function BarList({
   );
 }
 
+// --- Multi-colour gradient vertical bars (e.g. meals by cafeteria) ---
+// Each bar gets its own vibrant top→bottom gradient, a glossy cap, value label,
+// and a hover lift. Robust to any count of bars, zero values, and a single bar.
+const BAR_GRADIENTS: [string, string][] = [
+  ["#E0532A", "#B93E19"], // rust
+  ["#3B82F6", "#2563EB"], // blue
+  ["#2FD83B", "#19B924"], // green
+  ["#D9B62A", "#9C8016"], // gold
+  ["#9333EA", "#6D28D9"], // violet
+  ["#06B6D4", "#0E7490"], // cyan
+  ["#F59E0B", "#D97706"], // amber
+  ["#475569", "#0F172A"], // graphite
+];
+
+export function GradientBars({
+  items,
+  height = 260,
+}: {
+  items: { label: string; value: number }[];
+  height?: number;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = niceMax(Math.max(1, ...items.map((i) => i.value)));
+  const topPad = 26;   // room for the value label above the tallest bar
+  const axisPad = 26;  // room for the x labels below the baseline
+  const plotH = Math.max(40, height - topPad - axisPad);
+
+  return (
+    <div className="w-full select-none" onMouseLeave={() => setHover(null)}>
+      <div className="relative flex items-end justify-around gap-3" style={{ height: topPad + plotH }}>
+        {/* faint gridlines */}
+        {[0.25, 0.5, 0.75, 1].map((t) => (
+          <div key={t} className="pointer-events-none absolute inset-x-0" style={{ bottom: t * plotH, borderTop: "1px dashed rgba(0,0,0,0.06)" }} />
+        ))}
+        {items.map((it, i) => {
+          const [from, to] = BAR_GRADIENTS[i % BAR_GRADIENTS.length];
+          const barPx = Math.max((it.value / max) * plotH, it.value > 0 ? 4 : 0);
+          const active = hover === i;
+          return (
+            <div
+              key={it.label}
+              className="group relative z-10 flex h-full flex-1 flex-col items-center justify-end"
+              onMouseEnter={() => setHover(i)}
+            >
+              <div
+                className={`mb-1.5 tnum text-sm font-bold tabular-nums transition-all ${active ? "scale-110 text-ink" : "text-ink-secondary"}`}
+              >
+                {it.value.toLocaleString("en-IN")}
+              </div>
+              <div
+                className="w-3/5 min-w-[34px] max-w-[110px] rounded-t-xl transition-all duration-500 ease-out"
+                style={{
+                  height: barPx,
+                  background: `linear-gradient(180deg, ${from} 0%, ${to} 100%)`,
+                  boxShadow: active
+                    ? `0 10px 24px -6px ${to}66, inset 0 1px 0 rgba(255,255,255,0.45)`
+                    : `0 6px 16px -8px ${to}55, inset 0 1px 0 rgba(255,255,255,0.4)`,
+                  transform: active ? "translateY(-3px)" : "none",
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+      {/* x labels */}
+      <div className="mt-2 flex items-start justify-around gap-3">
+        {items.map((it, i) => (
+          <div key={it.label} className={`flex-1 truncate text-center text-xs font-semibold ${hover === i ? "text-ink" : "text-ink-secondary"}`} title={it.label}>
+            {it.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // --- Hourly distribution (today) ---
 const hourLabel = (h: number) => {
   const ap = h < 12 ? "am" : "pm";

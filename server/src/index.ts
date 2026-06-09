@@ -101,7 +101,7 @@ app.get("/api/dashboard", STAFF, async (req, res) => {
     const meal = mealOf(req);
     const eff = effectiveCafes(req, cafe);
     const today = todayWindow();
-    const [s, todayS, tr, devices, topEmp, meals, byCafe, cafeterias, hrs] = await Promise.all([
+    const [s, todayS, tr, devices, topEmp, meals, byCafe, byCafeMeal, cafeterias, hrs] = await Promise.all([
       Q.summaryC(r.from, r.to, eff, meal),                // KPIs scope to meal
       Q.summaryC(today.from, today.to, eff, meal),
       Q.trendC(r.from, r.to, eff),                        // trend returns all meal columns
@@ -109,6 +109,7 @@ app.get("/api/dashboard", STAFF, async (req, res) => {
       Q.byEmployeeC(r.from, r.to, eff, 12, meal),
       Q.byMeal(r.from, r.to, eff, meal),                  // breakdown — follows the meal filter
       Q.byCafeteria(r.from, r.to, eff, meal),
+      Q.byCafeteriaMeal(r.from, r.to, eff, meal),         // "Location Share" donut (cafeteria · meal)
       Q.cafeteriasList(allowedCafes(req)),
       Q.hourlyC(today.from, today.to, eff, meal),
     ]);
@@ -130,6 +131,7 @@ app.get("/api/dashboard", STAFF, async (req, res) => {
       topEmployees: topEmp,
       meals,
       byCafeteria: byCafe,
+      byCafeteriaMeal: byCafeMeal,
       hourly: hrs,
     });
   } catch (e) {
@@ -208,11 +210,11 @@ app.get("/api/employees", STAFF, async (req, res) => {
 });
 
 // ---- Reports (counts only, for audit / dispute reference) ----
-// Device report splits the shared Lunch/Dinner device by meal (time slot).
+// Location report: one row per (cafeteria, meal) — Lunch/Dinner shown separately.
 app.get("/api/reports/device", STAFF, async (req, res) => {
   try {
     const r = rng(req);
-    const rows = await Q.byDeviceMeal(r.from, r.to, effectiveCafes(req, cafeOf(req)), mealOf(req));
+    const rows = await Q.byLocationMeal(r.from, r.to, effectiveCafes(req, cafeOf(req)), mealOf(req));
     const totalMeals = rows.reduce((a, c) => a + c.meals, 0);
     ok(res, { range: r.key, from: r.from, to: r.to, rows, totalMeals });
   } catch (e) {
