@@ -4,9 +4,9 @@ import { FaceFill } from "../components/avatar";
 
 const mono = "ui-monospace, 'Cascadia Code', 'Consolas', monospace";
 
+// Live kiosk shows ONE meal at a time (no "All meals") — Lunch is the default.
 const MEALS = [
-  { k: "all", label: "All meals", val: null as string | null },
-  { k: "Lunch", label: "Lunch", val: "Lunch" },
+  { k: "Lunch", label: "Lunch", val: "Lunch" as string | null },
   { k: "Dinner", label: "Dinner", val: "Dinner" },
   { k: "Tea", label: "Tea", val: "Tea" },
   { k: "Biscuit", label: "Biscuit", val: "Biscuit" },
@@ -18,7 +18,7 @@ type MealKey = (typeof MEALS)[number]["k"];
 export function Display({ onExit }: { onExit: () => void }) {
   const [cafeterias, setCafeterias] = useState<{ id: number; name: string }[]>([]);
   const [cafe, setCafe] = useState<number | null>(null);
-  const [meal, setMeal] = useState<MealKey>("all");
+  const [meal, setMeal] = useState<MealKey>("Lunch");
   const mealVal = MEALS.find((m) => m.k === meal)!.val;
   const cafeName = useMemo(() => cafeterias.find((c) => c.id === cafe)?.name ?? null, [cafeterias, cafe]);
 
@@ -26,7 +26,7 @@ export function Display({ onExit }: { onExit: () => void }) {
   const [flash, setFlash] = useState<Set<number>>(new Set());
   const [clock, setClock] = useState(new Date());
   const [count, setCount] = useState(0);
-  const [countLabel, setCountLabel] = useState("All meals");
+  const [countLabel, setCountLabel] = useState("Lunch");
 
   useEffect(() => {
     api.liveCafeterias().then(setCafeterias).catch(() => {});

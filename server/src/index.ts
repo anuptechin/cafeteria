@@ -11,6 +11,7 @@ import { resolveFacePath } from "./facesFs.js";
 import { authRouter } from "./auth-routes.js";
 import { cafeteriasRouter } from "./cafeterias-routes.js";
 import { requireAuth, requireRole, seedSuperAdmin } from "./auth.js";
+import { buildDetailWorkbook } from "./export-xlsx.js";
 
 const app = express();
 app.set("trust proxy", true); // so clientIp() reads X-Forwarded-For correctly
@@ -106,7 +107,7 @@ app.get("/api/dashboard", STAFF, async (req, res) => {
       Q.trendC(r.from, r.to, eff),                        // trend returns all meal columns
       Q.byDeviceC(r.from, r.to, eff, meal),
       Q.byEmployeeC(r.from, r.to, eff, 12, meal),
-      Q.byMeal(r.from, r.to, eff),                        // breakdown — always all meals
+      Q.byMeal(r.from, r.to, eff, meal),                  // breakdown — follows the meal filter
       Q.byCafeteria(r.from, r.to, eff, meal),
       Q.cafeteriasList(allowedCafes(req)),
       Q.hourlyC(today.from, today.to, eff, meal),
@@ -230,16 +231,70 @@ app.get("/api/reports/employees", STAFF, async (req, res) => {
   }
 });
 
+// Date-wise report: per-day counts of each meal type (Lunch/Dinner/Tea/Biscuit),
+// scoped to the viewer's allowed ∩ selected cafeteria + range. trendC already
+// pivots by meal, so this is a thin wrapper over it.
+app.get("/api/reports/daily", STAFF, async (req, res) => {
+  try {
+    const r = rng(req);
+    const rows = await Q.trendC(r.from, r.to, effectiveCafes(req, cafeOf(req)));
+    ok(res, { range: r.key, from: r.from, to: r.to, rows });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Detailed multi-sheet Excel export (Employees summary + one employee×date grid
+// per meal, with cost). Streams a styled .xlsx. Scoped to range + cafeteria.
+app.get("/api/reports/export.xlsx", STAFF, async (req, res) => {
+  try {
+    const r = rng(req);
+    const requested = cafeOf(req);
+    const eff = effectiveCafes(req, requested);
+    let scope = "All cafeterias";
+    if (requested != null) {
+      const c = await one<{ name: string }>(`SELECT name FROM cafeterias WHERE id = $1`, [requested]);
+      scope = c?.name ?? `Cafeteria #${requested}`;
+    }
+    const rows = await Q.exportDetail(r.from, r.to, eff);
+    const d = (s: string) => s.slice(0, 10);
+    const generatedAt = new Date().toLocaleString("en-GB", {
+      timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+    const buf = await buildDetailWorkbook(
+      { title: "D'Decor — Cafeteria Consumption & Cost", periodLabel: `${d(r.from)} to ${d(r.to)}`, scope, generatedAt },
+      rows
+    );
+    const fname = `cafeteria_${r.key}_${d(r.from)}_${d(r.to)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    res.end(buf);
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Vendor/Company settlement (PDF source): per-cafeteria day-wise counts + cost.
+app.get("/api/reports/settlement", STAFF, async (req, res) => {
+  try {
+    const r = rng(req);
+    const data = await Q.settlementReport(r.from, r.to, effectiveCafes(req, cafeOf(req)));
+    ok(res, { range: r.key, from: r.from, to: r.to, generatedAt: new Date().toISOString(), ...data });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
 app.get("/api/reports/employee/:empId", STAFF, async (req, res) => {
   try {
     const r = rng(req);
     // KPI tiles scope to the viewer's allowed ∩ selected cafeteria; punch list +
     // total additionally scope to the selected meal.
-    const { emp, kpi, punches } = await Q.employeeReportC(
+    const { emp, kpi, cost, punches } = await Q.employeeReportC(
       req.params.empId, r.from, r.to, effectiveCafes(req, cafeOf(req)), mealOf(req)
     );
     if (!emp) return res.status(404).json({ ok: false, error: "Employee not found" });
-    ok(res, { emp, range: r.key, kpi, punches, totalMeals: punches.length });
+    ok(res, { emp, range: r.key, kpi, cost, punches, totalMeals: punches.length });
   } catch (e) {
     fail(res, e);
   }

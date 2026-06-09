@@ -14,7 +14,7 @@ export type DashboardData = {
   avgPerDay: number;
   today: { meals: number; employees: number };
   trend: TrendPoint[];
-  devices: { device_id: string; category: string | null; meals: number }[];
+  devices: { device_id: string; category: string | null; cafeteria_name: string | null; meals: number }[];
   topEmployees: { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null }[];
   meals: { meal: string; meals: number }[];
   byCafeteria: { name: string; meals: number }[];
@@ -149,6 +149,14 @@ export type TimeSlot = {
   dedup_mode: "once_per_slot" | "1min";
   sort: number;
 };
+// Current rate card row (the version in effect today) for one meal.
+export type MealPrice = {
+  cafeteria_id: number;
+  meal: string; // "Lunch" | "Dinner" | "Tea" | "Biscuit"
+  emp_paid: number;
+  company_paid: number;
+  effective_from: string;
+};
 export type Cafeteria = {
   id: number;
   name: string;
@@ -157,6 +165,7 @@ export type Cafeteria = {
   devices: Device[];
   slots: TimeSlot[];
   todayMeals: Record<string, number>;
+  prices: MealPrice[];
 };
 
 // Time-range selection used across pages.
@@ -192,6 +201,24 @@ export const api = {
     getJSON<any>(`/api/reports/employees?${rq(r)}` + cm(cafeteriaId, meal)),
   employeeReport: (empId: string, r: RangeState, cafeteriaId?: number | null, meal?: string | null) =>
     getJSON<any>(`/api/reports/employee/${empId}?${rq(r)}` + cm(cafeteriaId, meal)),
+  dailyReport: (r: RangeState, cafeteriaId?: number | null) =>
+    getJSON<any>(`/api/reports/daily?${rq(r)}` + cm(cafeteriaId, null)),
+  settlementReport: (r: RangeState, cafeteriaId?: number | null) =>
+    getJSON<any>(`/api/reports/settlement?${rq(r)}` + cm(cafeteriaId, null)),
+  // Detailed multi-sheet .xlsx — authed fetch → blob → browser download.
+  downloadXlsx: async (r: RangeState, cafeteriaId?: number | null) => {
+    const res = await authedFetch(`/api/reports/export.xlsx?${rq(r)}` + cm(cafeteriaId, null));
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") ?? "";
+    const m = cd.match(/filename="([^"]+)"/);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = m ? m[1] : "cafeteria_export.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 
   // ---- auth ----
   login: (username: string, password: string) =>
@@ -240,6 +267,8 @@ export const api = {
     sendJSON(`/api/devices/${encodeURIComponent(deviceId)}`, "DELETE"),
   saveTimeSlots: (id: number, slots: { id: number; start_time: string; end_time: string }[]) =>
     sendJSON(`/api/cafeterias/${id}/time-slots`, "PUT", { slots }),
+  savePrices: (id: number, prices: { meal: string; emp_paid: number; company_paid: number }[]) =>
+    sendJSON(`/api/cafeterias/${id}/prices`, "PUT", { prices }),
 
   auditSessions: (limit = 100) => getJSON<SessionRow[]>(`/api/audit/sessions?limit=${limit}`),
   auditStats: () =>

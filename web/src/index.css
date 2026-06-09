@@ -63,3 +63,60 @@ body {
     animation: shimmer 1.4s infinite;
   }
 }
+
+/* ---- Print / PDF: isolate #print-area, page-break per cafeteria ---- */
+@media print {
+  /* Hide the whole app, reveal only the settlement document. */
+  body * {
+    visibility: hidden !important;
+  }
+  #print-area,
+  #print-area * {
+    visibility: visible !important;
+  }
+  #print-area {
+    position: absolute !important;
+    inset: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  /* Each cafeteria starts on its own page; never split a chart/table row. */
+  .print-page {
+    break-before: page;
+    page-break-before: always;
+  }
+  .print-page:first-child {
+    break-before: auto;
+    page-break-before: auto;
+  }
+  .print-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  /* Keep brand fills/colours in print (browsers strip them otherwise). */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* Slim running footer pinned in the page's bottom margin — repeats per page and
+     never consumes a content page (fixes the closing note spilling to a new sheet). */
+  .print-running-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    text-align: center;
+    font-size: 8px;
+    line-height: 1.3;
+    color: #5c5a52;
+  }
+  @page {
+    size: A4;
+    /* extra bottom margin reserves room for the running footer */
+    margin: 12mm 12mm 16mm 12mm;
+  }
+}

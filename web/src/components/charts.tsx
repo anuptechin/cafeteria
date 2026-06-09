@@ -15,11 +15,13 @@ export function AreaChart({
   height = 200,
   color = "#000000",
   fill = "rgba(0,0,0,0.10)",
+  unit = "",
 }: {
   data: { label: string; value: number }[];
   height?: number;
   color?: string;
   fill?: string;
+  unit?: string;
 }) {
   const W = 600;
   const H = height;
@@ -101,7 +103,7 @@ export function AreaChart({
               className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-lg bg-black px-2.5 py-1.5 text-xs text-white shadow-pop tnum whitespace-nowrap"
               style={{ left: `${(points[hover].x / W) * 100}%`, top: `${(points[hover].y / H) * 100}%` }}
             >
-              <div className="font-semibold">{points[hover].value.toLocaleString("en-IN")} meals</div>
+              <div className="font-semibold">{points[hover].value.toLocaleString("en-IN")}{unit ? ` ${unit}` : ""}</div>
               <div className="text-white/60">{points[hover].label}</div>
             </div>
           )}
@@ -123,6 +125,125 @@ export function AreaChart({
   );
 }
 
+// --- Multi-line trend (pure SVG) — e.g. 4 meal lines per day ---
+// All series share the same x positions (one per label) and a single y scale.
+// Interactive on screen (hover guide + per-series dots + combined tooltip) and
+// fully static-safe for print (hover just never fires). A legend sits above.
+export function MultiLineChart({
+  labels,
+  series,
+  height = 200,
+}: {
+  labels: string[];
+  series: { name: string; color: string; values: number[] }[];
+  height?: number;
+}) {
+  const W = 680;
+  const H = height;
+  const pad = 12;
+  const n = labels.length;
+  const [hover, setHover] = useState<number | null>(null);
+  const max = niceMax(Math.max(1, ...series.flatMap((s) => s.values)));
+  const x = (i: number) => (n <= 1 ? W / 2 : (i / (n - 1)) * (W - pad * 2) + pad);
+  const y = (v: number) => H - pad - (v / max) * (H - pad * 2);
+  const step = W / Math.max(n, 1);
+
+  const pathFor = (vals: number[]) => {
+    const pts = vals.map((v, i) => ({ x: x(i), y: y(v) }));
+    if (!pts.length) return "";
+    if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] ?? pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] ?? p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`;
+    }
+    return d;
+  };
+
+  const ticks = [1, 0.75, 0.5, 0.25, 0];
+  const xCount = Math.min(n, 7);
+  const xIdx = n ? Array.from({ length: xCount }, (_, k) => Math.round((k / Math.max(1, xCount - 1)) * (n - 1))) : [];
+  const tipLeft = hover !== null ? Math.min(88, Math.max(12, (x(hover) / W) * 100)) : 0;
+
+  return (
+    <div className="w-full select-none">
+      {/* legend */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+        {series.map((s) => (
+          <span key={s.name} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary">
+            <span className="inline-block h-2.5 w-3.5 rounded-full" style={{ background: s.color }} />
+            {s.name}
+          </span>
+        ))}
+      </div>
+      <div className="flex">
+        <div className="flex flex-col justify-between pr-2 text-right text-[10px] tnum text-ink-secondary" style={{ height: H, paddingTop: pad, paddingBottom: pad }}>
+          {ticks.map((t) => <div key={t}>{kfmt(Math.round(max * t))}</div>)}
+        </div>
+        <div className="relative flex-1" style={{ height: H }} onMouseLeave={() => setHover(null)}>
+          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-full w-full overflow-visible">
+            {ticks.map((t) => {
+              const yy = pad + (1 - t) * (H - 2 * pad);
+              return <line key={t} x1={0} y1={yy} x2={W} y2={yy} stroke="rgba(0,0,0,0.07)" strokeWidth={1} vectorEffect="non-scaling-stroke" />;
+            })}
+            {/* hover guide */}
+            {hover !== null && (
+              <line x1={x(hover)} y1={pad} x2={x(hover)} y2={H - pad} stroke="rgba(0,0,0,0.22)" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+            )}
+            {/* lines + soft glow so overlapping series stay legible */}
+            {series.map((s) => (
+              <path key={s.name} d={pathFor(s.values)} fill="none" stroke={s.color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity={0.95} />
+            ))}
+            {/* dots: last point always, all points on hover */}
+            {series.map((s) => {
+              const li = s.values.length - 1;
+              if (li < 0) return null;
+              return <circle key={`end-${s.name}`} cx={x(li)} cy={y(s.values[li])} r={3} fill={s.color} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />;
+            })}
+            {hover !== null && series.map((s) => (
+              <circle key={`h-${s.name}`} cx={x(hover)} cy={y(s.values[hover] ?? 0)} r={4.5} fill={s.color} stroke="#fff" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            ))}
+            {/* invisible hover hit-zones per x */}
+            {labels.map((_, i) => (
+              <rect key={i} x={x(i) - step / 2} y={0} width={step} height={H} fill="transparent" onMouseEnter={() => setHover(i)} />
+            ))}
+          </svg>
+
+          {/* combined tooltip — date + each series value */}
+          {hover !== null && (
+            <div
+              className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg bg-black px-3 py-2 text-xs text-white shadow-pop"
+              style={{ left: `${tipLeft}%`, top: 4 }}
+            >
+              <div className="mb-1 font-semibold">{labels[hover]}</div>
+              <div className="space-y-0.5">
+                {series.map((s) => (
+                  <div key={s.name} className="flex items-center justify-between gap-3">
+                    <span className="flex items-center gap-1.5 text-white/80">
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: s.color }} />
+                      {s.name}
+                    </span>
+                    <span className="tnum font-semibold">{(s.values[hover] ?? 0).toLocaleString("en-IN")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {xIdx.map((i) => (
+            <div key={i} className="absolute -translate-x-1/2 text-[10px] text-ink-secondary" style={{ left: `${(x(i) / W) * 100}%`, top: H + 4 }}>
+              {labels[i]}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ height: 18 }} />
+    </div>
+  );
+}
+
 // --- Donut for the company vs employee split ---
 export function Donut({
   segments,
@@ -130,12 +251,14 @@ export function Donut({
   thickness = 22,
   centerLabel,
   centerSub,
+  unitWord = "total",
 }: {
-  segments: { value: number; color: string; label: string }[];
+  segments: { value: number; color: string; label: string; sub?: string }[];
   size?: number;
   thickness?: number;
   centerLabel?: string;
   centerSub?: string;
+  unitWord?: string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const total = Math.max(1, segments.reduce((a, s) => a + s.value, 0));
@@ -177,11 +300,12 @@ export function Donut({
       <div className="pointer-events-none absolute inset-0 grid place-content-center px-6 text-center">
         {active ? (
           <>
+            {active.sub && <div className="text-[11px] font-bold uppercase tracking-wide" style={{ color: active.color }}>{active.sub}</div>}
             <div className="text-xl font-bold tnum leading-none" style={{ color: active.color }}>
               {active.value.toLocaleString("en-IN")}
             </div>
             <div className="mt-1 text-[11px] font-medium leading-tight">{active.label}</div>
-            <div className="text-[11px] text-ink-secondary">{pct}% of meals</div>
+            <div className="text-[11px] text-ink-secondary">{pct}% of {unitWord}</div>
           </>
         ) : (
           <>
@@ -242,7 +366,17 @@ const hourRange = (h: number) => {
   return `${fmt(h)} – ${fmt(h + 1)}`;
 };
 
-export function HourlyBars({ data, height = 200 }: { data: { hour: number; meals: number }[]; height?: number }) {
+export function HourlyBars({
+  data,
+  height = 200,
+  subtitle = "today",
+  unit = "",
+}: {
+  data: { hour: number; meals: number }[];
+  height?: number;
+  subtitle?: string;
+  unit?: string;
+}) {
   const map = new Map(data.map((d) => [d.hour, d.meals]));
   const hours = Array.from({ length: 24 }, (_, h) => ({ hour: h, meals: map.get(h) ?? 0 }));
   const max = Math.max(1, ...hours.map((h) => h.meals));
@@ -257,7 +391,7 @@ export function HourlyBars({ data, height = 200 }: { data: { hour: number; meals
       <div className="mb-3 flex items-end justify-between">
         <div>
           <div className="tnum text-3xl font-bold leading-none">{total.toLocaleString("en-IN")}</div>
-          <div className="mt-1 text-xs text-ink-secondary">meals today</div>
+          <div className="mt-1 text-xs text-ink-secondary">{subtitle}</div>
         </div>
         {peak.meals > 0 && (
           <div className="text-right text-xs text-ink-secondary">
@@ -291,7 +425,7 @@ export function HourlyBars({ data, height = 200 }: { data: { hour: number; meals
                 {/* hover tooltip — count on top, full hour range below */}
                 <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-black px-2.5 py-1.5 text-center text-white shadow-pop group-hover:block">
                   <div className="tnum text-sm font-bold leading-none">{h.meals.toLocaleString("en-IN")}</div>
-                  <div className="text-[9px] uppercase tracking-wide text-white/60">meal{h.meals === 1 ? "" : "s"}</div>
+                  {unit && <div className="text-[9px] uppercase tracking-wide text-white/60">{unit}</div>}
                   <div className="mt-0.5 text-[10px] font-medium text-white/85">{hourRange(h.hour)}</div>
                 </div>
                 {/* x label every 3h */}

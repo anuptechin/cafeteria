@@ -23,7 +23,7 @@ const isCategory = (v: unknown): v is Category => CATEGORIES.includes(v as Categ
 cafeteriasRouter.get("/cafeterias", ADMIN, async (_req, res) => {
   try {
     const today = todayWindow();
-    const [cafeterias, devices, slots, counts] = await Promise.all([
+    const [cafeterias, devices, slots, counts, prices] = await Promise.all([
       query<{ id: number; name: string; active: boolean; created_at: string }>(
         `SELECT id, name, active, created_at FROM cafeterias ORDER BY name`
       ),
@@ -43,6 +43,15 @@ cafeteriasRouter.get("/cafeterias", ADMIN, async (_req, res) => {
           GROUP BY d.cafeteria_id, d.category`,
         [today.from, today.to]
       ),
+      // CURRENT rate card per cafeteria × meal: the newest version whose
+      // effective_from has already arrived (IST today). One row per (cafe, meal).
+      query<{ cafeteria_id: number; meal: string; emp_paid: number; company_paid: number; effective_from: string }>(
+        `SELECT DISTINCT ON (cafeteria_id, meal)
+                cafeteria_id, meal, emp_paid, company_paid, effective_from
+           FROM cafeteria_meal_prices
+          WHERE effective_from <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+          ORDER BY cafeteria_id, meal, effective_from DESC`
+      ),
     ]);
 
     const rows = cafeterias.map((c) => ({
@@ -52,6 +61,7 @@ cafeteriasRouter.get("/cafeterias", ADMIN, async (_req, res) => {
       todayMeals: counts
         .filter((m) => m.cafeteria_id === c.id)
         .reduce((acc, m) => ((acc[m.category] = m.meals), acc), {} as Record<string, number>),
+      prices: prices.filter((p) => p.cafeteria_id === c.id),
     }));
     ok(res, rows);
   } catch (e) {
@@ -69,8 +79,18 @@ cafeteriasRouter.post("/cafeterias", ADMIN, async (req, res) => {
        RETURNING id, name, active, created_at`,
       [name]
     );
-    // Give the new cafeteria the default meal slots (editable afterwards).
-    if (row) await query(`SELECT seed_cafeteria_time_slots($1)`, [row.id]);
+    // Give the new cafeteria the default meal slots + a baseline rate card
+    // (both editable afterwards). The price seed mirrors schema.sql's defaults.
+    if (row) {
+      await query(`SELECT seed_cafeteria_time_slots($1)`, [row.id]);
+      await query(
+        `INSERT INTO cafeteria_meal_prices (cafeteria_id, meal, emp_paid, company_paid, effective_from, created_by)
+         SELECT $1, v.meal, v.emp, v.co, DATE '2000-01-01', $2
+           FROM (VALUES ('Lunch',27.5,32.5),('Dinner',27.5,32.5),('Tea',3.5,3.5),('Biscuit',2.5,2.5)) AS v(meal,emp,co)
+          ON CONFLICT (cafeteria_id, meal, effective_from) DO NOTHING`,
+        [row.id, req.user?.username ?? "system"]
+      );
+    }
     await audit(req, "CAFETERIA_CREATED", { detail: `Created cafeteria ${name}` });
     ok(res, row);
   } catch (e: any) {
@@ -208,6 +228,49 @@ cafeteriasRouter.put("/cafeterias/:id/time-slots", ADMIN, async (req, res) => {
     const rows = await query(
       `SELECT id, cafeteria_id, meal, start_time, end_time, dedup_mode, sort
          FROM cafeteria_time_slots WHERE cafeteria_id = $1 ORDER BY sort, id`,
+      [id]
+    );
+    ok(res, rows);
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// ---- per-cafeteria meal PRICING: set Employee/Company paid per meal type ----
+// Each save creates a NEW rate version effective TODAY (IST). Past versions stay,
+// so historical reports keep the rate that applied then. Re-saving the same day
+// overwrites today's version (upsert). Vendor is always emp + company (not stored).
+const PRICE_MEALS = ["Lunch", "Dinner", "Tea", "Biscuit"] as const;
+cafeteriasRouter.put("/cafeterias/:id/prices", ADMIN, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const rates = Array.isArray(req.body.prices) ? req.body.prices : [];
+    const cafe = await one(`SELECT id FROM cafeterias WHERE id = $1`, [id]);
+    if (!cafe) return res.status(404).json({ ok: false, error: "Cafeteria not found" });
+
+    for (const r of rates) {
+      if (!PRICE_MEALS.includes(r.meal))
+        return res.status(400).json({ ok: false, error: `Invalid meal: ${r.meal}` });
+      const emp = Number(r.emp_paid);
+      const co = Number(r.company_paid);
+      if (!Number.isFinite(emp) || !Number.isFinite(co) || emp < 0 || co < 0)
+        return res.status(400).json({ ok: false, error: "Rates must be non-negative numbers" });
+      // effective_from = IST today; ON CONFLICT folds repeat edits within the day.
+      await query(
+        `INSERT INTO cafeteria_meal_prices (cafeteria_id, meal, emp_paid, company_paid, effective_from, created_by)
+         VALUES ($1, $2, $3, $4, (now() AT TIME ZONE 'Asia/Kolkata')::date, $5)
+         ON CONFLICT (cafeteria_id, meal, effective_from)
+         DO UPDATE SET emp_paid = EXCLUDED.emp_paid, company_paid = EXCLUDED.company_paid,
+                       created_by = EXCLUDED.created_by, created_at = now()`,
+        [id, r.meal, emp, co, req.user?.username ?? "system"]
+      );
+    }
+    await audit(req, "MEAL_PRICES_UPDATED", { detail: `Updated meal pricing for cafeteria #${id}` });
+    const rows = await query(
+      `SELECT DISTINCT ON (meal) meal, emp_paid, company_paid, effective_from
+         FROM cafeteria_meal_prices
+        WHERE cafeteria_id = $1 AND effective_from <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+        ORDER BY meal, effective_from DESC`,
       [id]
     );
     ok(res, rows);

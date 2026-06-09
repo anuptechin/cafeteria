@@ -9,6 +9,7 @@ import {
   type MealCategory,
 } from "../lib/api";
 import { Card, CardSkeleton, Modal, Empty } from "../components/ui";
+import { rupee } from "../lib/pricing";
 
 // Admin / super-admin only (the nav + the API both enforce this). Lets staff
 // define cafeterias, attach the punch devices for each meal category, and edit
@@ -149,7 +150,104 @@ function CafeteriaCard({ c, onChange }: { c: Cafeteria; onChange: () => void }) 
       </div>
 
       <TimeSlotsEditor c={c} onChange={onChange} />
+      <MealPricingEditor c={c} onChange={onChange} />
     </Card>
+  );
+}
+
+// Per-cafeteria meal pricing. Employee Paid + Company Paid per meal type; Vendor is
+// always their sum (shown live, never entered). Saving creates a NEW rate version
+// effective today — past reports keep the old rate (history stays frozen).
+const PRICE_MEALS = ["Lunch", "Dinner", "Tea", "Biscuit"] as const;
+function MealPricingEditor({ c, onChange }: { c: Cafeteria; onChange: () => void }) {
+  const [vals, setVals] = useState<Record<string, { emp: string; co: string }>>(() =>
+    Object.fromEntries(
+      PRICE_MEALS.map((m) => {
+        const p = c.prices?.find((x) => x.meal === m);
+        return [m, { emp: p ? String(p.emp_paid) : "0", co: p ? String(p.company_paid) : "0" }];
+      })
+    )
+  );
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  function set(meal: string, key: "emp" | "co", v: string) {
+    setVals((s) => ({ ...s, [meal]: { ...s[meal], [key]: v } }));
+    setSaved(false);
+  }
+  async function save() {
+    setBusy(true);
+    const prices = PRICE_MEALS.map((m) => ({
+      meal: m,
+      emp_paid: Number(vals[m].emp) || 0,
+      company_paid: Number(vals[m].co) || 0,
+    }));
+    const res = await api.savePrices(c.id, prices);
+    setBusy(false);
+    if (!(res as any).ok) return alert((res as any).error ?? "Could not save pricing");
+    setSaved(true);
+    onChange();
+  }
+
+  const effFrom = c.prices?.[0]?.effective_from;
+
+  return (
+    <div className="border-t px-5 py-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-baseline gap-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-ink-secondary">Meal pricing (₹)</span>
+          {effFrom && <span className="text-[10px] text-ink-secondary/70">current rate · since {effFrom}</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          {saved && <span className="text-[11px] font-medium text-success">Saved ✓</span>}
+          <button onClick={save} disabled={busy} className="rounded-lg bg-black px-4 py-1.5 text-xs font-semibold text-white hover:bg-black/85 disabled:opacity-40">
+            {busy ? "Saving…" : "Save pricing"}
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {PRICE_MEALS.map((m) => {
+          const emp = Number(vals[m].emp) || 0;
+          const co = Number(vals[m].co) || 0;
+          return (
+            <div key={m} className="rounded-xl border bg-surface-white p-3">
+              <div className="mb-2 text-xs font-semibold">{m}</div>
+              <label className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-ink-secondary">Employee</span>
+                <span className="flex items-center gap-1">
+                  <span className="text-xs text-ink-secondary">₹</span>
+                  <input
+                    type="number" min="0" step="0.5" inputMode="decimal"
+                    value={vals[m].emp}
+                    onChange={(e) => set(m, "emp", e.target.value)}
+                    className="tnum w-20 rounded-lg border bg-surface-bege/40 px-2 py-1 text-right text-sm outline-none focus:ring-2 focus:ring-black/10"
+                  />
+                </span>
+              </label>
+              <label className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-ink-secondary">Company</span>
+                <span className="flex items-center gap-1">
+                  <span className="text-xs text-ink-secondary">₹</span>
+                  <input
+                    type="number" min="0" step="0.5" inputMode="decimal"
+                    value={vals[m].co}
+                    onChange={(e) => set(m, "co", e.target.value)}
+                    className="tnum w-20 rounded-lg border bg-surface-bege/40 px-2 py-1 text-right text-sm outline-none focus:ring-2 focus:ring-black/10"
+                  />
+                </span>
+              </label>
+              <div className="mt-2 flex items-center justify-between border-t pt-2">
+                <span className="text-[11px] font-semibold text-ink-secondary">Vendor</span>
+                <span className="tnum text-sm font-bold">{rupee(emp + co)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[11px] text-ink-secondary">
+        Vendor total is Employee + Company. Saving applies from today onward; past reports keep their existing rates.
+      </p>
+    </div>
   );
 }
 

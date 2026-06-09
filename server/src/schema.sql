@@ -44,6 +44,11 @@ ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_date  DATE;
 ALTER TABLE punches ADD COLUMN IF NOT EXISTS punch_time  TIME;
 ALTER TABLE punches ADD COLUMN IF NOT EXISTS device_id   TEXT;
 ALTER TABLE punches ADD COLUMN IF NOT EXISTS image       BYTEA;
+-- Frozen meal classification ('Lunch'|'Dinner'|'Tea'|'Biscuit'|NULL), stamped on
+-- the row at INSERT by the dedup trigger from the slot windows live AT THAT MOMENT.
+-- Stored (not derived at read time) so editing a cafeteria's time-slots later never
+-- reclassifies past punches — history is immutable; only new scans use new windows.
+ALTER TABLE punches ADD COLUMN IF NOT EXISTS meal        TEXT;
 -- If an older run created `image` as TEXT, migrate it to BYTEA (raw image bytes).
 DO $$
 BEGIN
@@ -169,6 +174,23 @@ BEGIN
     ) THEN
       RETURN NULL;     -- outside any valid meal window for this device → drop
     END IF;
+  END IF;
+
+  -- Freeze the meal classification onto the row NOW, from the windows in effect at
+  -- this instant. Mirrors the punch_meals derivation but is computed once and
+  -- stored, so a later slot edit can never rewrite this punch's meal.
+  IF dev_category = 'tea' THEN
+    NEW.meal := 'Tea';
+  ELSIF dev_category = 'biscuits' THEN
+    NEW.meal := 'Biscuit';
+  ELSIF dev_category = 'lunch_dinner' THEN
+    SELECT s.meal INTO NEW.meal
+      FROM cafeteria_time_slots s
+     WHERE s.cafeteria_id = dev_cafeteria AND s.dedup_mode = 'once_per_slot' AND s.active
+       AND local_time BETWEEN s.start_time AND s.end_time
+     ORDER BY s.sort LIMIT 1;
+  ELSE
+    NEW.meal := NULL;   -- unmapped device
   END IF;
 
   -- De-duplication below applies to identified employees only.
@@ -395,11 +417,67 @@ BEGIN
   END LOOP;
 END $$;
 
--- Classified punch view: every scan tagged with its cafeteria and meal. Meal is
--- derived from the device category — Tea / Biscuit are fixed by the device, while
--- a Lunch/Dinner device's scan is Lunch or Dinner depending on which once_per_slot
--- window (for THAT cafeteria) the local time falls in. Unmapped devices -> NULLs.
--- The dashboard reads cafeteria-wise / meal-wise figures straight off this view.
+-- ============================================================
+--  Per-cafeteria, per-meal PRICING (Reports only — dashboard/live stay
+--  count-only). Each (cafeteria, meal) keeps a HISTORY of rate versions; the
+--  rate for any given day is the latest version whose effective_from <= that day.
+--  Only Employee Paid + Company Paid are stored; Vendor = their sum (never stored).
+--  Editing a price inserts a NEW version effective TODAY, so past reports keep the
+--  rate that applied then — history is immutable, exactly like the slot freeze.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cafeteria_meal_prices (
+  id             SERIAL        PRIMARY KEY,
+  cafeteria_id   INTEGER       NOT NULL REFERENCES cafeterias(id) ON DELETE CASCADE,
+  meal           TEXT          NOT NULL CHECK (meal IN ('Lunch','Dinner','Tea','Biscuit')),
+  emp_paid       NUMERIC(10,2) NOT NULL DEFAULT 0,
+  company_paid   NUMERIC(10,2) NOT NULL DEFAULT 0,
+  effective_from DATE          NOT NULL,
+  created_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+  created_by     TEXT,
+  UNIQUE (cafeteria_id, meal, effective_from)
+);
+-- Resolves "rate effective on day X" — newest effective_from <= X, in one index hit.
+CREATE INDEX IF NOT EXISTS idx_cafe_prices_lookup
+  ON cafeteria_meal_prices (cafeteria_id, meal, effective_from DESC);
+
+-- Seed a baseline rate card effective from the far past (so ALL existing history is
+-- covered at the original sheet rates) for every cafeteria × meal that has none yet.
+-- Idempotent: a meal that already has any version is left untouched.
+INSERT INTO cafeteria_meal_prices (cafeteria_id, meal, emp_paid, company_paid, effective_from, created_by)
+SELECT c.id, v.meal, v.emp, v.co, DATE '2000-01-01', 'system'
+  FROM cafeterias c
+  CROSS JOIN (VALUES
+    ('Lunch',   27.5, 32.5),
+    ('Dinner',  27.5, 32.5),
+    ('Tea',      3.5,  3.5),
+    ('Biscuit',  2.5,  2.5)
+  ) AS v(meal, emp, co)
+ WHERE NOT EXISTS (
+   SELECT 1 FROM cafeteria_meal_prices p WHERE p.cafeteria_id = c.id AND p.meal = v.meal
+ );
+
+-- One-time backfill of the frozen meal for rows that predate the column (meal IS
+-- NULL on a MAPPED device). Rows already classified (non-NULL) are NEVER touched
+-- again, so a server restart cannot rewrite history. Uses the CURRENT slots as the
+-- only available reference for old data — identical to what the view derived before.
+UPDATE punches p
+   SET meal = CASE
+     WHEN d.category = 'tea'      THEN 'Tea'
+     WHEN d.category = 'biscuits' THEN 'Biscuit'
+     WHEN d.category = 'lunch_dinner' THEN (
+       SELECT s.meal FROM cafeteria_time_slots s
+        WHERE s.cafeteria_id = d.cafeteria_id AND s.dedup_mode = 'once_per_slot' AND s.active
+          AND (p.punched_at AT TIME ZONE 'Asia/Kolkata')::time BETWEEN s.start_time AND s.end_time
+        ORDER BY s.sort LIMIT 1)
+   END
+  FROM cafeteria_devices d
+ WHERE d.device_id = p.device_id
+   AND p.meal IS NULL;
+
+-- Classified punch view: every scan tagged with its cafeteria and FROZEN meal.
+-- Meal is read straight from punches.meal (stamped at insert), NOT re-derived — so
+-- the view is a plain join (fast) and slot edits never reclassify history. The
+-- cafeteria name/category still reflect the device's CURRENT mapping.
 -- Dropped first: CREATE OR REPLACE VIEW cannot add/reorder columns in the middle
 -- of an existing view, so a plain replace fails once the column set changes.
 DROP VIEW IF EXISTS punch_meals;
@@ -409,19 +487,7 @@ SELECT
   d.cafeteria_id,
   c.name     AS cafeteria_name,
   d.category AS device_category,
-  CASE
-    WHEN d.category = 'tea'      THEN 'Tea'
-    WHEN d.category = 'biscuits' THEN 'Biscuit'
-    WHEN d.category = 'lunch_dinner' THEN (
-      SELECT s.meal FROM cafeteria_time_slots s
-       WHERE s.cafeteria_id = d.cafeteria_id
-         AND s.dedup_mode = 'once_per_slot'
-         AND s.active
-         AND (p.punched_at AT TIME ZONE 'Asia/Kolkata')::time
-             BETWEEN s.start_time AND s.end_time
-       ORDER BY s.sort
-       LIMIT 1)
-  END AS meal
+  p.meal     AS meal
 FROM punches p
 LEFT JOIN cafeteria_devices d ON d.device_id = p.device_id
 LEFT JOIN cafeterias c        ON c.id = d.cafeteria_id;

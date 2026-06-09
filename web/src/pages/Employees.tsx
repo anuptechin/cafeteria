@@ -123,7 +123,7 @@ const MEAL_KPIS: { k: string; tone: string }[] = [
   { k: "Biscuit", tone: "#B99919" },
 ];
 
-function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_id: string; name: string } | null; range: RangeState; cafe: number | null; meal: string | null; onClose: () => void }) {
+export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_id: string; name: string } | null; range: RangeState; cafe: number | null; meal: string | null; onClose: () => void }) {
   const { data, loading } = usePoll(
     () => (emp ? api.employeeReport(emp.emp_id, range, cafe, meal) : Promise.resolve(null)),
     [emp?.emp_id, range, cafe, meal],

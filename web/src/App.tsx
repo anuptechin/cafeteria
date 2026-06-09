@@ -127,9 +127,9 @@ function Sidebar({ route, nav }: { route: Route; nav: (r: Route) => void }) {
   });
   return (
     <aside className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col border-r bg-surface-white">
-      <div className="px-6 pb-6 pt-7">
-        <img src="/ddecor-logo.webp" alt="D'DECOR" className="h-16 w-auto object-contain object-left" />
-        <div className="mt-1.5 text-xs font-medium tracking-wide text-ink-secondary">Cafeteria Intelligence</div>
+      <div className="flex flex-col items-start px-5 pb-6 pt-6">
+        <img src="/ddecor-logo.webp" alt="D'DECOR" className="h-20 w-auto max-w-full object-contain object-left" />
+        <div className="mt-2 text-[13px] font-semibold tracking-wide text-ink-secondary">Cafeteria Intelligence</div>
       </div>
       <nav className="flex flex-1 flex-col gap-1 px-3">
         {NAV.filter((n) => (user ? n.roles.includes(user.role) : false)).map((n) => (

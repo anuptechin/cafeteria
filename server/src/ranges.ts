@@ -36,7 +36,7 @@ function daysSinceMonday(y: number, m: number, day: number): number {
 // week2 : Week before last — two weeks ago, full Mon–Sun week
 // month : This Month       — 1st of the current month 00:00 → now
 // 60d   : rolling last 60 days
-export type RangeKey = "today" | "week0" | "week1" | "week2" | "month" | "60d" | "custom" | "all";
+export type RangeKey = "today" | "week0" | "week1" | "week2" | "month" | "lastmonth" | "60d" | "custom" | "all";
 
 export function resolveRange(
   key: string,
@@ -56,7 +56,7 @@ export function resolveRange(
     };
   }
 
-  const k = (["today", "week0", "week1", "week2", "month", "60d", "all"].includes(key) ? key : "month") as RangeKey;
+  const k = (["today", "week0", "week1", "week2", "month", "lastmonth", "60d", "all"].includes(key) ? key : "month") as RangeKey;
   const mo = daysSinceMonday(y, m, day); // days since this week's Monday
   let from: string;
   let to = nowIso;
@@ -78,6 +78,14 @@ export function resolveRange(
     case "month":
       from = istMidnight(y, m, 1);
       break;
+    case "lastmonth": {
+      // Previous full calendar month: [1st of last month 00:00, 1st of this month 00:00).
+      const pm = m === 1 ? 12 : m - 1;
+      const py = m === 1 ? y - 1 : y;
+      from = istMidnight(py, pm, 1);
+      to = istMidnight(y, m, 1);
+      break;
+    }
     case "60d":
       from = new Date(now.getTime() - 60 * 864e5).toISOString();
       break;
