@@ -106,6 +106,23 @@ CREATE OR REPLACE TRIGGER trg_punches_local_datetime
   BEFORE INSERT OR UPDATE OF punched_at ON punches
   FOR EACH ROW EXECUTE FUNCTION punches_set_local_datetime();
 
+-- Drop diagnostics. Every BEFORE-INSERT trigger that silently discards a punch
+-- (RETURN NULL) first records WHAT it dropped and WHY here — so "HikCentral says
+-- sent OK but nothing landed" is visible instead of a black hole. Reasons:
+--   'duplicate'                  exact re-send of a scan already held
+--   'off-timeline'               mapped device scanned outside every valid window
+--   'already-had-meal-this-slot' second Lunch/Dinner scan inside the same slot
+--   '1min-repeat'                Tea/Biscuit repeat within the 1-minute guard
+CREATE TABLE IF NOT EXISTS punches_rejected (
+  id         BIGSERIAL   PRIMARY KEY,
+  at         TIMESTAMPTZ NOT NULL DEFAULT now(),   -- when the drop happened
+  emp_id     TEXT,
+  device_id  TEXT,
+  punched_at TIMESTAMPTZ,                          -- the event instant as received
+  reason     TEXT        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_punches_rejected_at ON punches_rejected (at DESC);
+
 -- Idempotent ingestion. The external push (HikCentral "Database Synchronization"
 -- with "Auto Push Failed Record" on) re-sends already-synced rows; without this
 -- each repeat would raise a duplicate-key error on uq_punch, which HikCentral
@@ -121,6 +138,8 @@ BEGIN
        AND device_id IS NOT DISTINCT FROM NEW.device_id
        AND punched_at = NEW.punched_at
   ) THEN
+    INSERT INTO punches_rejected (emp_id, device_id, punched_at, reason)
+    VALUES (NEW.emp_id, NEW.device_id, NEW.punched_at, 'duplicate');
     RETURN NULL;          -- already recorded this scan; skip silently
   END IF;
   RETURN NEW;
@@ -172,6 +191,8 @@ BEGIN
          AND ((s.start_time <= s.end_time AND local_time BETWEEN s.start_time AND s.end_time)
            OR (s.start_time >  s.end_time AND (local_time >= s.start_time OR local_time <= s.end_time)))
     ) THEN
+      INSERT INTO punches_rejected (emp_id, device_id, punched_at, reason)
+      VALUES (NEW.emp_id, NEW.device_id, NEW.punched_at, 'off-timeline');
       RETURN NULL;     -- outside any valid meal window for this device → drop
     END IF;
   END IF;
@@ -217,6 +238,8 @@ BEGIN
            WHERE p.emp_id = NEW.emp_id
              AND p.punched_at >= win_start AND p.punched_at <= win_end
         ) THEN
+          INSERT INTO punches_rejected (emp_id, device_id, punched_at, reason)
+          VALUES (NEW.emp_id, NEW.device_id, NEW.punched_at, 'already-had-meal-this-slot');
           RETURN NULL;        -- already had this meal in this slot today
         END IF;
         RETURN NEW;           -- first punch of the slot — keep it
@@ -234,6 +257,8 @@ BEGIN
        AND p.punched_at BETWEEN NEW.punched_at - interval '1 minute'
                             AND NEW.punched_at + interval '1 minute'
   ) THEN
+    INSERT INTO punches_rejected (emp_id, device_id, punched_at, reason)
+    VALUES (NEW.emp_id, NEW.device_id, NEW.punched_at, '1min-repeat');
     RETURN NULL;
   END IF;
   RETURN NEW;
