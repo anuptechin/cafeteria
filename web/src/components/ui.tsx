@@ -10,13 +10,17 @@ export function Modal({
   subtitle,
   children,
   width = 460,
+  bare = false,
 }: {
   open: boolean;
   onClose: () => void;
-  title: React.ReactNode;
+  title?: React.ReactNode;
   subtitle?: React.ReactNode;
   children: React.ReactNode;
   width?: number;
+  // bare: no padding/header chrome — the child owns the full canvas (still
+  // rounded, clipped, dismissable via backdrop + Escape).
+  bare?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -41,23 +45,27 @@ export function Modal({
         aria-modal="true"
         onMouseDown={(e) => e.stopPropagation()}
         style={{ width }}
-        className="relative w-full max-w-[calc(100vw-2rem)] rounded-2xl border bg-surface-white p-6 shadow-pop animate-pop-in"
+        className={`relative w-full max-w-[calc(100vw-2rem)] rounded-2xl border bg-surface-white shadow-pop animate-pop-in ${
+          bare ? "overflow-hidden" : "p-6"
+        }`}
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-bold tracking-tight">{title}</h3>
-            {subtitle && <p className="mt-0.5 text-sm text-ink-secondary">{subtitle}</p>}
+        {!bare && (
+          <div className="mb-5 flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold tracking-tight">{title}</h3>
+              {subtitle && <p className="mt-0.5 text-sm text-ink-secondary">{subtitle}</p>}
+            </div>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="grid h-8 w-8 shrink-0 place-content-center rounded-lg text-ink-secondary transition-colors hover:bg-black/5 hover:text-black"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="grid h-8 w-8 shrink-0 place-content-center rounded-lg text-ink-secondary transition-colors hover:bg-black/5 hover:text-black"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
-            </svg>
-          </button>
-        </div>
+        )}
         {children}
       </div>
     </div>

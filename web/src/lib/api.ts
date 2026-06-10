@@ -15,7 +15,7 @@ export type DashboardData = {
   today: { meals: number; employees: number };
   trend: TrendPoint[];
   devices: { device_id: string; category: string | null; cafeteria_name: string | null; meals: number }[];
-  topEmployees: { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null }[];
+  topEmployees: { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null; has_photo?: boolean }[];
   meals: { meal: string; meals: number }[];
   byCafeteria: { name: string; meals: number }[];
   byCafeteriaMeal: { cafeteria_name: string; meal: string; meals: number }[];
@@ -230,6 +230,20 @@ export const api = {
     ),
   logout: () => sendJSON(`/api/auth/logout`, "POST"),
   me: () => getJSON<{ user: AuthedUser }>(`/api/auth/me`),
+  // Manually uploaded employee portrait (admin) — body is the raw image blob.
+  uploadEmpPhoto: async (empId: string, blob: Blob) => {
+    const res = await authedFetch(`/api/employees/${encodeURIComponent(empId)}/photo`, {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "image/jpeg" },
+      body: blob,
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error ?? "Upload failed");
+  },
+  deleteEmpPhoto: async (empId: string) => {
+    const json = await sendJSON(`/api/employees/${encodeURIComponent(empId)}/photo`, "DELETE");
+    if (!json.ok) throw new Error(json.error ?? "Delete failed");
+  },
   changePassword: (current: string, next: string) =>
     sendJSON(`/api/auth/change-password`, "POST", { current, next }),
 

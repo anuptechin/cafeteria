@@ -42,7 +42,9 @@ export const hashPassword = (plain: string) => bcrypt.hash(plain, 12);
 export const verifyPassword = (plain: string, hash: string) => bcrypt.compare(plain, hash);
 
 // ---- token ----
-export function signToken(u: Omit<AuthUser, "sid"> & { sid?: string }): string {
+// cafeterias is deliberately NOT part of the claim — requireAuth re-resolves it
+// from the DB on every request — so it isn't part of the signature either.
+export function signToken(u: Omit<AuthUser, "sid" | "cafeterias"> & { sid?: string }): string {
   const sid = u.sid ?? crypto.randomUUID();
   return jwt.sign({ id: u.id, username: u.username, name: u.name, role: u.role, sid }, env.jwtSecret, {
     expiresIn: TOKEN_TTL,

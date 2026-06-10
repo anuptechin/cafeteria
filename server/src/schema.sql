@@ -664,3 +664,15 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS users_guard_trg ON users;
 CREATE TRIGGER users_guard_trg BEFORE UPDATE OR DELETE ON users
   FOR EACH ROW EXECUTE FUNCTION users_guard();
+
+-- ---- Uploaded employee photos --------------------------------------------
+-- Manually uploaded portraits for employees whose punches carry no HikCentral
+-- capture. One photo per employee, stored inline (small JPEGs, client-resized).
+-- Takes precedence over the synced /faces files everywhere a face is shown.
+CREATE TABLE IF NOT EXISTS emp_photos (
+  emp_id      TEXT PRIMARY KEY,
+  image       BYTEA NOT NULL,
+  mime        TEXT NOT NULL DEFAULT 'image/jpeg',
+  uploaded_by TEXT,
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -10,7 +10,7 @@ import { sniffImageType } from "./photos.js";
 import { resolveFacePath } from "./facesFs.js";
 import { authRouter } from "./auth-routes.js";
 import { cafeteriasRouter } from "./cafeterias-routes.js";
-import { requireAuth, requireRole, seedSuperAdmin } from "./auth.js";
+import { requireAuth, requireRole, seedSuperAdmin, audit } from "./auth.js";
 import { buildDetailWorkbook } from "./export-xlsx.js";
 
 const app = express();
@@ -23,6 +23,24 @@ app.use(express.json());
 // by the punch's person_name / emp_id. Falls back to a real inline-bytea image if
 // one was stored, else 404 (the client then renders an inline monogram). Public
 // (an <img> tag can't send auth headers).
+// Manually uploaded portrait for an employee (emp_photos). Served directly so
+// the directory can show photos for people who never had a camera capture.
+// Public for the same reason as /faces/:id (<img> can't send auth headers).
+app.get("/faces/emp/:empId", async (req, res) => {
+  try {
+    const row = await one<{ image: Buffer; mime: string }>(
+      `SELECT image, mime FROM emp_photos WHERE emp_id = $1`,
+      [String(req.params.empId)]
+    );
+    if (!row) return res.status(404).end();
+    res.type(row.mime);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.end(row.image);
+  } catch {
+    res.status(500).end();
+  }
+});
+
 app.get("/faces/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -32,6 +50,20 @@ app.get("/faces/:id", async (req, res) => {
       [id]
     );
     if (!row) return res.status(404).end();
+
+    // A manually uploaded portrait wins over the synced capture — uploading is
+    // an explicit admin action, so it's the face we should show everywhere.
+    if (row.emp_id) {
+      const up = await one<{ image: Buffer; mime: string }>(
+        `SELECT image, mime FROM emp_photos WHERE emp_id = $1`,
+        [row.emp_id]
+      );
+      if (up) {
+        res.type(up.mime);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.end(up.image);
+      }
+    }
 
     // Preferred: the photo file on disk.
     const file = resolveFacePath(row.person_name, row.emp_id);
@@ -197,6 +229,52 @@ const effectiveCafes = (req: express.Request, requested: number | null): number[
   return allowed; // may be [] -> sees nothing
 };
 
+// ---- Employee photo upload / delete (admin + super admin) ----
+// The HikCentral faces volume is mounted read-only, so manual portraits live in
+// Postgres (emp_photos). The frontend resizes to ≤900px JPEG before uploading.
+const ADMIN = requireRole("super_admin", "admin");
+const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+app.post(
+  "/api/employees/:empId/photo",
+  ADMIN,
+  express.raw({ type: PHOTO_TYPES, limit: "5mb" }),
+  async (req, res) => {
+    try {
+      const empId = String(req.params.empId);
+      const mime = String(req.headers["content-type"] ?? "").split(";")[0].trim();
+      if (!PHOTO_TYPES.includes(mime) || !Buffer.isBuffer(req.body) || req.body.length < 100)
+        return res.status(400).json({ ok: false, error: "Send the image file as the request body (JPEG/PNG/WebP)" });
+      const emp = await one<{ emp_id: string }>(`SELECT emp_id FROM emp_data WHERE emp_id = $1`, [empId]);
+      if (!emp) return res.status(404).json({ ok: false, error: "Unknown employee" });
+      await query(
+        `INSERT INTO emp_photos (emp_id, image, mime, uploaded_by, uploaded_at)
+         VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT (emp_id) DO UPDATE
+           SET image = EXCLUDED.image, mime = EXCLUDED.mime,
+               uploaded_by = EXCLUDED.uploaded_by, uploaded_at = now()`,
+        [empId, req.body, mime, req.user?.username ?? null]
+      );
+      await audit(req, "EMP_PHOTO_UPLOADED", { detail: `Uploaded photo for employee ${empId} (${Math.round(req.body.length / 1024)} KB)` });
+      ok(res, { emp_id: empId });
+    } catch (e) {
+      fail(res, e);
+    }
+  }
+);
+
+app.delete("/api/employees/:empId/photo", ADMIN, async (req, res) => {
+  try {
+    const empId = String(req.params.empId);
+    const r = await query(`DELETE FROM emp_photos WHERE emp_id = $1 RETURNING emp_id`, [empId]);
+    if (!r.length) return res.status(404).json({ ok: false, error: "No uploaded photo for this employee" });
+    await audit(req, "EMP_PHOTO_DELETED", { detail: `Deleted uploaded photo for employee ${empId}` });
+    ok(res, { emp_id: empId });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
 // ---- Employee directory / search (optional cafeteria scope) ----
 app.get("/api/employees", STAFF, async (req, res) => {
   try {
@@ -303,6 +381,15 @@ app.get("/api/reports/employee/:empId", STAFF, async (req, res) => {
 });
 
 async function start() {
+  // Self-healing schema bit: emp_photos may not exist on databases set up before
+  // the photo-upload feature shipped (schema.sql also has it for fresh installs).
+  await query(`CREATE TABLE IF NOT EXISTS emp_photos (
+    emp_id      TEXT PRIMARY KEY,
+    image       BYTEA NOT NULL,
+    mime        TEXT NOT NULL DEFAULT 'image/jpeg',
+    uploaded_by TEXT,
+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
   await seedSuperAdmin();
   await setupLive(app);
   app.listen(env.port, () => {

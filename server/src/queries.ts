@@ -23,8 +23,12 @@ type FaceRow = {
   punched_at: string;
 };
 
+// has_image: a camera capture exists (person_name keys the disk file) OR an
+// admin uploaded a portrait (emp_photos) — /faces/:id serves the upload first.
 const FACE_COLS = `id, emp_id, person_name AS name, device_id, meal, cafeteria_name,
-            (person_name IS NOT NULL AND person_name <> '') AS has_image, punched_at`;
+            ((person_name IS NOT NULL AND person_name <> '')
+              OR EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = punch_meals.emp_id)) AS has_image,
+            punched_at`;
 
 // Most-recent punch id that carries a captured face for an employee — the avatar
 // source. Correlated subquery; `empExpr` is the (trusted, code-supplied) column
@@ -293,12 +297,14 @@ export async function byEmployeeC(from: string, to: string, cafes: number[] | nu
     meals: number;
     last_seen: string | null;
     image_id: number | null;
+    has_photo: boolean;
   }>(
     `SELECT pm.emp_id,
             max(pm.person_name) AS name,
             count(*)::int       AS meals,
             max(pm.punched_at)  AS last_seen,
-            ${latestImageId("pm.emp_id")} AS image_id
+            ${latestImageId("pm.emp_id")} AS image_id,
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id) AS has_photo
        FROM punch_meals pm
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
         AND pm.emp_id IS NOT NULL AND pm.emp_id <> ''
@@ -353,7 +359,7 @@ export async function employeesReportC(
   return query<{
     emp_id: string; name: string; meals: number;
     emp_paid: number; company_paid: number;
-    last_seen: string | null; image_id: number | null;
+    last_seen: string | null; image_id: number | null; has_photo: boolean;
   }>(
     `WITH ${PRICE_RANGES}
      SELECT pm.emp_id,
@@ -362,7 +368,8 @@ export async function employeesReportC(
             sum(COALESCE(pr.emp_paid, 0))::numeric     AS emp_paid,
             sum(COALESCE(pr.company_paid, 0))::numeric AS company_paid,
             max(pm.punched_at)  AS last_seen,
-            ${latestImageId("pm.emp_id")} AS image_id
+            ${latestImageId("pm.emp_id")} AS image_id,
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id) AS has_photo
        FROM punch_meals pm
        ${PRICE_JOIN}
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
@@ -430,7 +437,7 @@ export async function mealKpiC(
 export async function employeesDirectory(
   from: string, to: string, search: string, cafes: number[] | null, meal: string | null, limit = 120
 ) {
-  type Row = { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null };
+  type Row = { emp_id: string; name: string; meals: number; last_seen: string | null; image_id: number | null; has_photo: boolean };
 
   if (search) {
     const like = `%${search}%`;
@@ -439,7 +446,8 @@ export async function employeesDirectory(
               ed.emp_name                  AS name,
               COALESCE(pm.meals, 0)        AS meals,
               pm.last_seen,
-              pm.image_id
+              pm.image_id,
+              EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = ed.emp_id) AS has_photo
          FROM emp_data ed
          LEFT JOIN LATERAL (
            SELECT count(*)::int AS meals,
@@ -464,7 +472,8 @@ export async function employeesDirectory(
             max(pm.person_name) AS name,
             count(*)::int       AS meals,
             max(pm.punched_at)  AS last_seen,
-            ${latestImageId("pm.emp_id")} AS image_id
+            ${latestImageId("pm.emp_id")} AS image_id,
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id) AS has_photo
        FROM punch_meals pm
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
         AND pm.emp_id IS NOT NULL AND pm.emp_id <> ''
@@ -482,10 +491,11 @@ export async function employeesDirectory(
 export async function employeeReportC(
   empId: string, from: string, to: string, cafes: number[] | null, meal: string | null = null
 ) {
-  const emp = await one<{ emp_id: string; name: string; image_id: number | null }>(
+  const emp = await one<{ emp_id: string; name: string; image_id: number | null; has_photo: boolean }>(
     `SELECT emp_id,
             max(person_name) AS name,
-            ${latestImageId("$1")} AS image_id
+            ${latestImageId("$1")} AS image_id,
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = $1) AS has_photo
        FROM punches
       WHERE emp_id = $1
       GROUP BY emp_id`,

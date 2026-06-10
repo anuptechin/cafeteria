@@ -43,6 +43,36 @@ export const shortName = (name: string) => {
   return `${p[0]} ${p[p.length - 1]}`;
 };
 
+// Human label for the selected range (mirrors the RangePicker options).
+// Lives here (not in employeePdf) so UI chrome can use it without pulling
+// the heavy jsPDF chunk into the main bundle.
+export function rangeLabel(r: { key: string; from: string; to: string }): string {
+  const weekIdx: Record<string, number> = { week0: 0, week1: 1, week2: 2 };
+  if (r.key in weekIdx) {
+    const ist = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const mon = new Date(ist);
+    mon.setDate(ist.getDate() - ((ist.getDay() + 6) % 7) - 7 * weekIdx[r.key]);
+    const sun = new Date(mon);
+    sun.setDate(mon.getDate() + 6);
+    const f = (d: Date) => d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    const name = { week0: "This Week", week1: "Last Week", week2: "Week before last" }[r.key];
+    return `${name} (${f(mon)} – ${f(sun)})`;
+  }
+  switch (r.key) {
+    case "today": return "Today";
+    case "month": return "This Month";
+    case "60d": return "Last 60 Days";
+    case "custom": {
+      const f = (ymd: string) => {
+        const [y, m, d] = ymd.split("-").map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+      };
+      return r.from && r.to ? `${f(r.from)} – ${f(r.to)}` : "Custom Range";
+    }
+    default: return r.key;
+  }
+}
+
 export const initials = (name: string) => {
   const p = name.trim().split(/\s+/);
   return ((p[0]?.[0] ?? "") + (p[1]?.[0] ?? "")).toUpperCase();

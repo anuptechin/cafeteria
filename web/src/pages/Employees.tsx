@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, usePoll, useCafeterias, MEAL_FILTERS, type RangeState } from "../lib/api";
 import { Card, RangePicker, Avatar, CardSkeleton, Empty, Modal } from "../components/ui";
-import { count, dateOf, timeOf } from "../lib/format";
+import { count, dateOf, timeOf, rangeLabel } from "../lib/format";
+import { useAuth } from "../lib/auth";
+import { FaceFill } from "../components/avatar";
 
 export function Employees() {
   const [range, setRange] = useState<RangeState>({ key: "month", from: "", to: "" });
@@ -92,7 +94,12 @@ export function Employees() {
                   >
                     <td className="py-2.5">
                       <div className="flex items-center gap-3">
-                        <Avatar empId={e.emp_id} name={e.name} imageUrl={e.image_id ? `/faces/${e.image_id}` : undefined} size={34} />
+                        <Avatar
+                          empId={e.emp_id}
+                          name={e.name}
+                          imageUrl={e.has_photo ? `/faces/emp/${encodeURIComponent(e.emp_id)}` : e.image_id ? `/faces/${e.image_id}` : undefined}
+                          size={34}
+                        />
                         <div>
                           <div className="font-medium">{e.name}</div>
                           <div className="tnum text-xs text-ink-secondary">{e.emp_id}</div>
@@ -116,12 +123,39 @@ export function Employees() {
   );
 }
 
+// Resize an uploaded photo to ≤900px JPEG before sending — keeps the DB lean
+// and uploads fast even when someone picks a 12MP phone shot.
+async function downscalePhoto(file: File, max = 900): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff"; // PNG transparency → white, not black, after JPEG
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    if (!blob) throw new Error("Could not read that image — try a JPEG or PNG");
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 const MEAL_KPIS: { k: string; tone: string }[] = [
   { k: "Lunch", tone: "#B93E19" },
   { k: "Dinner", tone: "#000000" },
   { k: "Tea", tone: "#19B924" },
   { k: "Biscuit", tone: "#B99919" },
 ];
+const MEAL_TONE: Record<string, string> = Object.fromEntries(MEAL_KPIS.map((m) => [m.k, m.tone]));
 
 export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_id: string; name: string } | null; range: RangeState; cafe: number | null; meal: string | null; onClose: () => void }) {
   const { data, loading } = usePoll(
@@ -129,59 +163,309 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
     [emp?.emp_id, range, cafe, meal],
     0
   );
+  const cafeterias = useCafeterias();
+  const [exporting, setExporting] = useState(false);
+  const { can } = useAuth();
+  const canManagePhoto = can("super_admin", "admin");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  // Local override after an upload/delete (server truth is data.emp.has_photo);
+  // `ver` busts the browser cache so the new image shows immediately.
+  const [photo, setPhoto] = useState<{ has: boolean; ver: number } | null>(null);
+  useEffect(() => setPhoto(null), [emp?.emp_id]);
 
+  // Pre-warm the heavy jsPDF chunk while the user is looking at the modal so
+  // the export click only has to render the document.
+  useEffect(() => {
+    if (emp) void import("../lib/employeePdf");
+  }, [emp]);
+
+  const hasPhoto = photo?.has ?? !!data?.emp?.has_photo;
+  const avatarUrl = emp
+    ? hasPhoto
+      ? `/faces/emp/${encodeURIComponent(emp.emp_id)}?v=${photo?.ver ?? 0}`
+      : data?.emp?.image_id
+      ? `/faces/${data.emp.image_id}`
+      : undefined
+    : undefined;
+
+  const uploadPhoto = async (file: File) => {
+    if (!emp) return;
+    setPhotoBusy(true);
+    try {
+      await api.uploadEmpPhoto(emp.emp_id, await downscalePhoto(file));
+      setPhoto({ has: true, ver: Date.now() });
+    } catch (e) {
+      alert((e as Error).message || "Photo upload failed");
+    } finally {
+      setPhotoBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const removePhoto = async () => {
+    if (!emp || !confirm("Remove this employee's uploaded photo?")) return;
+    setPhotoBusy(true);
+    try {
+      await api.deleteEmpPhoto(emp.emp_id);
+      setPhoto({ has: false, ver: Date.now() });
+    } catch (e) {
+      alert((e as Error).message || "Could not remove the photo");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const exportPdf = async () => {
+    if (!emp || !data) return;
+    setExporting(true);
+    try {
+      // jsPDF is heavy — load it only when an export is actually requested.
+      const { exportEmployeePdf } = await import("../lib/employeePdf");
+      await exportEmployeePdf({
+        emp,
+        range,
+        cafeteriaName: cafe ? cafeterias.find((c) => c.id === cafe)?.name ?? null : null,
+        meal,
+        kpi: data.kpi ?? {},
+        totalMeals: data.totalMeals ?? 0,
+        punches: data.punches ?? [],
+      });
+    } catch (e) {
+      alert((e as Error).message || "PDF export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const cafeName = cafe ? cafeterias.find((c) => c.id === cafe)?.name ?? `Cafeteria #${cafe}` : "All cafeterias";
+  const period = rangeLabel(range);
+
+  const exportBtn = (cls: string) => (
+    <button onClick={exportPdf} disabled={exporting || !data} className={cls}>
+      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
+        <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {exporting ? "Preparing…" : "Export PDF"}
+    </button>
+  );
+
+  // The dossier: a black identity rail (portrait · scope · headline total) beside
+  // a bege ledger (meal KPIs + punch history). Modal chrome is bare — this owns
+  // the whole canvas.
   return (
-    <Modal open={!!emp} onClose={onClose} title={emp?.name ?? "Employee"} subtitle={emp?.emp_id} width={560}>
-      {loading && !data ? (
-        <CardSkeleton h={200} />
-      ) : data ? (
-        <div className="space-y-4">
-          {/* Per-meal KPI numbers (scoped to the selected cafeteria) — the active
-              meal filter is highlighted. */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {MEAL_KPIS.map((m) => {
-              const active = meal === m.k;
-              return (
-                <div key={m.k} className={`relative overflow-hidden rounded-xl border p-3 ${active ? "bg-black text-white ring-2 ring-black" : "bg-surface-bege"}`}>
-                  <div className="absolute left-0 top-0 h-full w-1" style={{ background: m.tone }} />
-                  <div className={`text-xs ${active ? "text-white/70" : "text-ink-secondary"}`}>{m.k}</div>
-                  <div className="tnum text-2xl font-bold">{count(data.kpi?.[m.k] ?? 0)}</div>
+    <Modal open={!!emp} onClose={onClose} width={920} bare>
+      <div className="flex max-h-[min(88vh,840px)] flex-col sm:h-[min(88vh,840px)] sm:flex-row">
+        {/* ───── Identity rail ───── */}
+        <aside className="relative shrink-0 overflow-hidden bg-black p-6 text-white sm:w-[268px] sm:p-7">
+          <img
+            src="/ddecor-logo.webp"
+            alt=""
+            aria-hidden
+            className="pointer-events-none absolute -bottom-5 -right-14 w-72 select-none opacity-[0.07] invert"
+          />
+          <div className="relative flex h-full flex-row items-start gap-5 sm:flex-col sm:items-stretch">
+            {/* Portrait + photo controls */}
+            <div className="w-24 shrink-0 sm:w-full">
+              <div className="relative aspect-square w-full overflow-hidden rounded-2xl ring-1 ring-white/20">
+                <FaceFill
+                  key={avatarUrl ?? "none"}
+                  empId={emp?.emp_id ?? null}
+                  name={emp?.name ?? null}
+                  imageUrl={avatarUrl}
+                  fontSize="clamp(1.6rem, 5vw, 3.4rem)"
+                />
+              </div>
+              {canManagePhoto && (
+                <div className="mt-2.5 flex gap-1.5">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => e.target.files?.[0] && uploadPhoto(e.target.files[0])}
+                  />
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    disabled={photoBusy}
+                    className="flex-1 rounded-lg border border-white/20 px-2 py-1.5 text-[11px] font-semibold text-white/75 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                  >
+                    {photoBusy ? "Working…" : hasPhoto ? "Replace photo" : "Upload photo"}
+                  </button>
+                  {hasPhoto && (
+                    <button
+                      onClick={removePhoto}
+                      disabled={photoBusy}
+                      aria-label="Remove photo"
+                      title="Remove photo"
+                      className="rounded-lg border border-white/20 px-2.5 py-1.5 text-[11px] font-semibold text-white/60 transition-colors hover:border-error hover:bg-error hover:text-white disabled:opacity-40"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
+                        <path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center justify-between rounded-xl bg-black/[0.03] px-4 py-2.5 text-sm">
-            <span className="text-ink-secondary">{meal ? `${meal} meals in view` : "Total meals in period"}</span>
-            <span className="tnum text-lg font-bold">{count(data.totalMeals)}</span>
-          </div>
+              )}
+            </div>
 
-          <div className="max-h-72 overflow-y-auto rounded-xl border">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-surface-white">
-                <tr className="border-b text-left text-xs uppercase tracking-wide text-ink-secondary">
-                  <th className="px-3 py-2 font-medium">Date</th>
-                  <th className="px-3 py-2 font-medium">Time</th>
-                  <th className="px-3 py-2 font-medium">Meal</th>
-                  <th className="px-3 py-2 font-medium">Cafeteria · Device</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.punches.map((p: any) => (
-                  <tr key={p.id} className="border-b border-black/5 last:border-0">
-                    <td className="px-3 py-2">{dateOf(p.punched_at)}</td>
-                    <td className="px-3 py-2 tnum">{timeOf(p.punched_at)}</td>
-                    <td className="px-3 py-2">{p.meal ?? "—"}</td>
-                    <td className="px-3 py-2 text-ink-secondary">{(p.cafeteria_name ? p.cafeteria_name + " · " : "") + (p.device_id ?? "—")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!data.punches.length && <Empty>No meals in this period.</Empty>}
+            {/* Name + ID */}
+            <div className="min-w-0 flex-1 sm:mt-5 sm:flex-none">
+              <h3 className="text-xl font-bold leading-tight tracking-tight sm:text-[22px]">{emp?.name}</h3>
+              <div className="tnum mt-1 text-[11px] font-medium tracking-[0.2em] text-white/50">{emp?.emp_id}</div>
+            </div>
+
+            <div className="mt-5 hidden h-px w-full shrink-0 bg-white/15 sm:block" />
+
+            {/* Scope */}
+            <dl className="mt-5 hidden space-y-3.5 sm:block">
+              {[
+                ["Period", period],
+                ["Cafeteria", cafeName],
+                ["Meal", meal ?? "All meals"],
+              ].map(([k, v]) => (
+                <div key={k}>
+                  <dt className="text-[9px] font-semibold uppercase tracking-[0.24em] text-white/40">{k}</dt>
+                  <dd className="mt-0.5 text-[13px] font-medium leading-snug text-white/90">{v}</dd>
+                </div>
+              ))}
+            </dl>
+
+            {/* Headline total + export */}
+            <div className="mt-auto hidden pt-6 sm:block">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.24em] text-white/40">
+                {meal ? `${meal} meals in period` : "Total meals in period"}
+              </div>
+              <div className="tnum mt-1.5 text-[46px] font-bold leading-none tracking-tight">
+                {data ? count(data.totalMeals) : "—"}
+              </div>
+              {exportBtn(
+                "mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-white py-2.5 text-xs font-bold text-black transition-colors hover:bg-white/85 disabled:opacity-50"
+              )}
+            </div>
           </div>
-        </div>
-      ) : (
-        <Empty>Couldn't load this employee.</Empty>
-      )}
+        </aside>
+
+        {/* ───── Ledger ───── */}
+        <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-bege">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute right-4 top-4 z-20 grid h-8 w-8 place-content-center rounded-lg text-ink-secondary transition-colors hover:bg-black/5 hover:text-black"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+            </svg>
+          </button>
+
+          {loading && !data ? (
+            <div className="space-y-4 p-7 pt-14">
+              <CardSkeleton h={92} />
+              <CardSkeleton h={320} />
+            </div>
+          ) : data ? (
+            <>
+              <div className="px-6 pb-4 pt-6 sm:px-7">
+                <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-ink-secondary">
+                  Meal breakdown
+                </div>
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  {MEAL_KPIS.map((m, i) => {
+                    const active = meal === m.k;
+                    return (
+                      <div
+                        key={m.k}
+                        style={{ animationDelay: `${i * 70}ms` }}
+                        className={`relative overflow-hidden rounded-xl p-3.5 shadow-card animate-fade-up ${
+                          active ? "bg-black text-white" : "bg-surface-white"
+                        }`}
+                      >
+                        <div className="absolute inset-x-0 top-0 h-[3px]" style={{ background: m.tone }} />
+                        <div
+                          className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                            active ? "text-white/60" : "text-ink-secondary"
+                          }`}
+                        >
+                          {m.k}
+                        </div>
+                        <div className="tnum mt-1.5 text-[26px] font-bold leading-none">{count(data.kpi?.[m.k] ?? 0)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-baseline justify-between px-6 pb-2 sm:px-7">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-ink-secondary">
+                  Punch history
+                </div>
+                <div className="tnum text-[11px] text-ink-secondary">{count(data.punches.length)} punches</div>
+              </div>
+
+              <div className="min-h-0 flex-1 px-6 pb-6 sm:px-7">
+                <div className="max-h-full overflow-y-auto rounded-xl border bg-surface-white">
+                  {data.punches.length ? (
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 z-10 bg-surface-white shadow-[0_1px_0_rgba(0,0,0,0.1)]">
+                        <tr className="text-left text-[10px] uppercase tracking-[0.14em] text-ink-secondary">
+                          <th className="px-4 py-2.5 font-semibold">Date</th>
+                          <th className="px-4 py-2.5 font-semibold">Time</th>
+                          <th className="px-4 py-2.5 font-semibold">Meal</th>
+                          <th className="px-4 py-2.5 font-semibold">Cafeteria · Device</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.punches.map((p: any, i: number) => (
+                          <tr
+                            key={p.id}
+                            style={{ animationDelay: `${Math.min(i, 14) * 35}ms` }}
+                            className="border-b border-black/5 transition-colors animate-fade-up last:border-0 hover:bg-black/[0.025]"
+                          >
+                            <td className="px-4 py-2.5 font-medium">{dateOf(p.punched_at)}</td>
+                            <td className="tnum px-4 py-2.5 text-ink-secondary">{timeOf(p.punched_at)}</td>
+                            <td className="px-4 py-2">
+                              {p.meal ? (
+                                <span
+                                  className="pill text-[11px] font-semibold"
+                                  style={{ background: `${MEAL_TONE[p.meal] ?? "#000000"}14`, color: MEAL_TONE[p.meal] ?? "#000000" }}
+                                >
+                                  {p.meal}
+                                </span>
+                              ) : (
+                                <span className="text-ink-secondary">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 text-[13px] text-ink-secondary">
+                              {(p.cafeteria_name ? p.cafeteria_name + " · " : "") + (p.device_id ?? "—")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <Empty>No meals in this period.</Empty>
+                  )}
+                </div>
+              </div>
+
+              {/* Compact footer for small screens (the rail collapses there) */}
+              <div className="flex items-center justify-between gap-3 border-t bg-surface-white px-6 py-3 sm:hidden">
+                <div>
+                  <div className="text-[9px] font-semibold uppercase tracking-[0.2em] text-ink-secondary">
+                    {meal ? `${meal} meals` : "Total meals"}
+                  </div>
+                  <div className="tnum text-xl font-bold leading-tight">{count(data.totalMeals)}</div>
+                </div>
+                {exportBtn(
+                  "flex items-center gap-1.5 rounded-full bg-black px-4 py-2 text-xs font-semibold text-white hover:bg-black/85 disabled:opacity-50"
+                )}
+              </div>
+            </>
+          ) : (
+            <Empty>Couldn't load this employee.</Empty>
+          )}
+        </section>
+      </div>
     </Modal>
   );
 }

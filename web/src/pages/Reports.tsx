@@ -302,7 +302,7 @@ function EmployeesReport({ range, cafe, onCSV }: { range: RangeState; cafe: numb
                 >
                   <td className="py-2">
                     <div className="flex items-center gap-2.5">
-                      <Avatar empId={r.emp_id} name={r.name} imageUrl={r.image_id ? `/faces/${r.image_id}` : undefined} size={30} />
+                      <Avatar empId={r.emp_id} name={r.name} imageUrl={r.has_photo ? `/faces/emp/${encodeURIComponent(r.emp_id)}` : r.image_id ? `/faces/${r.image_id}` : undefined} size={30} />
                       <div>
                         <div className="font-medium">{r.name}</div>
                         <div className="tnum text-xs text-ink-secondary">{r.emp_id}</div>
@@ -383,7 +383,7 @@ function EmployeeLookup({ range, cafe, cafeterias }: { range: RangeState; cafe: 
                   onClick={() => choose(r)}
                   className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-black/5"
                 >
-                  <Avatar empId={r.emp_id} name={r.name} imageUrl={r.image_id ? `/faces/${r.image_id}` : undefined} size={30} />
+                  <Avatar empId={r.emp_id} name={r.name} imageUrl={r.has_photo ? `/faces/emp/${encodeURIComponent(r.emp_id)}` : r.image_id ? `/faces/${r.image_id}` : undefined} size={30} />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{r.name}</div>
                     <div className="tnum truncate text-xs text-ink-secondary">{r.emp_id}</div>
@@ -414,7 +414,7 @@ function EmployeeDetail({ data }: { data: any }) {
   return (
     <Card>
       <div className="mb-5 flex items-center gap-4">
-        <Avatar empId={data.emp.emp_id} name={data.emp.name} imageUrl={data.emp.image_id ? `/faces/${data.emp.image_id}` : undefined} size={56} />
+        <Avatar empId={data.emp.emp_id} name={data.emp.name} imageUrl={data.emp.has_photo ? `/faces/emp/${encodeURIComponent(data.emp.emp_id)}` : data.emp.image_id ? `/faces/${data.emp.image_id}` : undefined} size={56} />
         <div>
           <div className="text-xl font-bold">{data.emp.name}</div>
           <div className="text-sm text-ink-secondary"><span className="tnum">{data.emp.emp_id}</span></div>
