@@ -264,7 +264,9 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
             aria-hidden
             className="pointer-events-none absolute -bottom-5 -right-14 w-72 select-none opacity-[0.07] invert"
           />
-          <div className="relative flex h-full flex-row items-start gap-5 sm:flex-col sm:items-stretch">
+          {/* min-h-0 + overflow-y-auto: on short screens the rail scrolls instead
+              of clipping the total / Export PDF at the bottom. */}
+          <div className="relative flex h-full min-h-0 flex-row items-start gap-5 overflow-y-auto sm:flex-col sm:items-stretch">
             {/* Portrait + photo controls */}
             <div className="w-24 shrink-0 sm:w-full">
               <div className="relative aspect-square w-full overflow-hidden rounded-2xl ring-1 ring-white/20">
@@ -395,11 +397,14 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
                 </div>
               </div>
 
-              <div className="flex items-baseline justify-between px-6 pb-2 sm:px-7">
+              <div className="flex items-center justify-between px-6 pb-2 sm:px-7">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-ink-secondary">
                   Punch history
+                  <span className="tnum ml-2 normal-case tracking-normal text-ink-secondary/70">· {count(data.punches.length)} punches</span>
                 </div>
-                <div className="tnum text-[11px] text-ink-secondary">{count(data.punches.length)} punches</div>
+                {exportBtn(
+                  "hidden items-center gap-1.5 rounded-full bg-black px-4 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-black/85 disabled:opacity-50 sm:flex"
+                )}
               </div>
 
               <div className="min-h-0 flex-1 px-6 pb-6 sm:px-7">
