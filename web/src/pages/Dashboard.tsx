@@ -92,7 +92,7 @@ export function Dashboard() {
 
   // A live punch only joins Recent when "now" is within the selected range: any
   // preset ends at now (always), a custom range only if today ≤ its end date.
-  const liveInRange = range.key !== "custom" || range.to >= new Date().toLocaleDateString("en-CA");
+  const liveInRange = range.key !== "custom" || range.to >= new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
   // Single SSE subscription feeds both lists (avoids opening two connections).
   useLivePunches((f) => {
     if (cafeName && f.cafeteria_name !== cafeName) return;
