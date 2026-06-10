@@ -89,11 +89,14 @@ DROP INDEX IF EXISTS uq_punch;                 -- recreated below over (emp_id, 
 CREATE OR REPLACE FUNCTION punches_set_local_datetime() RETURNS trigger AS $$
 BEGIN
   -- The punch source (HikCentral) sends local IST wall-clock WITHOUT an offset,
-  -- but its DB driver pins the session to UTC, so Postgres reads that wall-clock
-  -- as UTC and the event lands 5h30m ahead once shown in IST. On INSERT, re-anchor:
-  -- take the wall-clock and relabel it Asia/Kolkata so punched_at is the true
-  -- instant — independent of whatever timezone the ingesting session uses.
-  IF TG_OP = 'INSERT' THEN
+  -- so the instant Postgres records depends on the ingesting session's timezone.
+  -- If that session runs UTC, the wall-clock is mislabeled and the event lands
+  -- 5h30m IN THE FUTURE. A scan cannot come from the future — so that signature
+  -- (and only that) is re-anchored back to IST. A timestamp that is already sane
+  -- (session timezone correct) is left untouched. The previous UNCONDITIONAL
+  -- re-anchor corrupted every punch by −5h30m whenever the ingest session was
+  -- IST (e.g. after a reconnect picked up the database's Asia/Kolkata default).
+  IF TG_OP = 'INSERT' AND NEW.punched_at > now() + interval '2 hours' THEN
     NEW.punched_at := (NEW.punched_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata';
   END IF;
   NEW.punch_date := (NEW.punched_at AT TIME ZONE 'Asia/Kolkata')::date;
