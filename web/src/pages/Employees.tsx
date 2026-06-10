@@ -258,12 +258,6 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
       <div className="flex max-h-[min(88vh,840px)] flex-col sm:h-[min(88vh,840px)] sm:flex-row">
         {/* ───── Identity rail ───── */}
         <aside className="relative shrink-0 overflow-hidden bg-black p-6 text-white sm:w-[268px] sm:p-7">
-          <img
-            src="/ddecor-logo.webp"
-            alt=""
-            aria-hidden
-            className="pointer-events-none absolute -bottom-5 -right-14 w-72 select-none opacity-[0.07] invert"
-          />
           {/* min-h-0 + overflow-y-auto: on short screens the rail scrolls instead
               of clipping the total / Export PDF at the bottom. */}
           <div className="relative flex h-full min-h-0 flex-row items-start gap-5 overflow-y-auto sm:flex-col sm:items-stretch">
@@ -333,18 +327,8 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
               ))}
             </dl>
 
-            {/* Headline total + export */}
-            <div className="mt-auto hidden pt-6 sm:block">
-              <div className="text-[9px] font-semibold uppercase tracking-[0.24em] text-white/40">
-                {meal ? `${meal} meals in period` : "Total meals in period"}
-              </div>
-              <div className="tnum mt-1.5 text-[46px] font-bold leading-none tracking-tight">
-                {data ? count(data.totalMeals) : "—"}
-              </div>
-              {exportBtn(
-                "mt-6 flex w-full items-center justify-center gap-1.5 rounded-full bg-white py-2.5 text-xs font-bold text-black transition-colors hover:bg-white/85 disabled:opacity-50"
-              )}
-            </div>
+            {/* Total meals lives in the ledger header ("· n punches") and the
+                export button in the ledger toolbar — the rail stays clean. */}
           </div>
         </aside>
 
