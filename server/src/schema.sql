@@ -669,9 +669,11 @@ CREATE TRIGGER users_guard_trg BEFORE UPDATE OR DELETE ON users
 -- Manually uploaded portraits for employees whose punches carry no HikCentral
 -- capture. One photo per employee, stored inline (small JPEGs, client-resized).
 -- Takes precedence over the synced /faces files everywhere a face is shown.
+-- image = NULL marks "photo hidden by an admin": the synced capture file lives
+-- on a read-only volume, so suppression is recorded here instead of deleting it.
 CREATE TABLE IF NOT EXISTS emp_photos (
   emp_id      TEXT PRIMARY KEY,
-  image       BYTEA NOT NULL,
+  image       BYTEA,
   mime        TEXT NOT NULL DEFAULT 'image/jpeg',
   uploaded_by TEXT,
   uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()

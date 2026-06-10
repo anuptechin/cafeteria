@@ -23,11 +23,13 @@ type FaceRow = {
   punched_at: string;
 };
 
-// has_image: a camera capture exists (person_name keys the disk file) OR an
-// admin uploaded a portrait (emp_photos) — /faces/:id serves the upload first.
+// has_image: an uploaded portrait exists (emp_photos, image set), OR a camera
+// capture exists (person_name keys the disk file) and wasn't suppressed by an
+// admin (emp_photos row with image = NULL). /faces/:id applies the same rules.
 const FACE_COLS = `id, emp_id, person_name AS name, device_id, meal, cafeteria_name,
-            ((person_name IS NOT NULL AND person_name <> '')
-              OR EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = punch_meals.emp_id)) AS has_image,
+            (EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = punch_meals.emp_id AND ep.image IS NOT NULL)
+              OR ((person_name IS NOT NULL AND person_name <> '')
+                  AND NOT EXISTS(SELECT 1 FROM emp_photos ep2 WHERE ep2.emp_id = punch_meals.emp_id AND ep2.image IS NULL))) AS has_image,
             punched_at`;
 
 // Most-recent punch id that carries a captured face for an employee — the avatar
@@ -36,6 +38,8 @@ const FACE_COLS = `id, emp_id, person_name AS name, device_id, meal, cafeteria_n
 const latestImageId = (empExpr: string) =>
   `(SELECT x.id FROM punches x
               WHERE x.emp_id = ${empExpr} AND x.person_name IS NOT NULL
+                AND NOT EXISTS(SELECT 1 FROM emp_photos eh
+                                WHERE eh.emp_id = ${empExpr} AND eh.image IS NULL)
               ORDER BY x.punched_at DESC LIMIT 1)`;
 
 // Effective-dated price versions expanded to half-open day ranges:
@@ -304,7 +308,7 @@ export async function byEmployeeC(from: string, to: string, cafes: number[] | nu
             count(*)::int       AS meals,
             max(pm.punched_at)  AS last_seen,
             ${latestImageId("pm.emp_id")} AS image_id,
-            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id) AS has_photo
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id AND ep.image IS NOT NULL) AS has_photo
        FROM punch_meals pm
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
         AND pm.emp_id IS NOT NULL AND pm.emp_id <> ''
@@ -369,7 +373,7 @@ export async function employeesReportC(
             sum(COALESCE(pr.company_paid, 0))::numeric AS company_paid,
             max(pm.punched_at)  AS last_seen,
             ${latestImageId("pm.emp_id")} AS image_id,
-            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id) AS has_photo
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id AND ep.image IS NOT NULL) AS has_photo
        FROM punch_meals pm
        ${PRICE_JOIN}
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
@@ -447,7 +451,7 @@ export async function employeesDirectory(
               COALESCE(pm.meals, 0)        AS meals,
               pm.last_seen,
               pm.image_id,
-              EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = ed.emp_id) AS has_photo
+              EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = ed.emp_id AND ep.image IS NOT NULL) AS has_photo
          FROM emp_data ed
          LEFT JOIN LATERAL (
            SELECT count(*)::int AS meals,
@@ -473,7 +477,7 @@ export async function employeesDirectory(
             count(*)::int       AS meals,
             max(pm.punched_at)  AS last_seen,
             ${latestImageId("pm.emp_id")} AS image_id,
-            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id) AS has_photo
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = pm.emp_id AND ep.image IS NOT NULL) AS has_photo
        FROM punch_meals pm
       WHERE pm.punched_at >= $1 AND pm.punched_at < $2
         AND pm.emp_id IS NOT NULL AND pm.emp_id <> ''
@@ -495,7 +499,7 @@ export async function employeeReportC(
     `SELECT emp_id,
             max(person_name) AS name,
             ${latestImageId("$1")} AS image_id,
-            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = $1) AS has_photo
+            EXISTS(SELECT 1 FROM emp_photos ep WHERE ep.emp_id = $1 AND ep.image IS NOT NULL) AS has_photo
        FROM punches
       WHERE emp_id = $1
       GROUP BY emp_id`,

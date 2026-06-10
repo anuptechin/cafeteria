@@ -29,7 +29,7 @@ app.use(express.json());
 app.get("/faces/emp/:empId", async (req, res) => {
   try {
     const row = await one<{ image: Buffer; mime: string }>(
-      `SELECT image, mime FROM emp_photos WHERE emp_id = $1`,
+      `SELECT image, mime FROM emp_photos WHERE emp_id = $1 AND image IS NOT NULL`,
       [String(req.params.empId)]
     );
     if (!row) return res.status(404).end();
@@ -53,12 +53,15 @@ app.get("/faces/:id", async (req, res) => {
 
     // A manually uploaded portrait wins over the synced capture — uploading is
     // an explicit admin action, so it's the face we should show everywhere.
+    // A row with image = NULL means "photo removed by an admin": the synced
+    // capture is suppressed too (the volume is read-only, we can't delete it).
     if (row.emp_id) {
-      const up = await one<{ image: Buffer; mime: string }>(
+      const up = await one<{ image: Buffer | null; mime: string }>(
         `SELECT image, mime FROM emp_photos WHERE emp_id = $1`,
         [row.emp_id]
       );
       if (up) {
+        if (!up.image) return res.status(404).end(); // suppressed
         res.type(up.mime);
         res.setHeader("Cache-Control", "public, max-age=86400");
         return res.end(up.image);
@@ -263,9 +266,23 @@ app.post(
   }
 );
 
+// Default: delete the uploaded portrait (falls back to the synced capture).
+// ?hide=1: suppress the photo entirely — stores an image-NULL marker row, since
+// the HikCentral capture file lives on a read-only volume and can't be deleted.
 app.delete("/api/employees/:empId/photo", ADMIN, async (req, res) => {
   try {
     const empId = String(req.params.empId);
+    if (req.query.hide === "1") {
+      await query(
+        `INSERT INTO emp_photos (emp_id, image, uploaded_by, uploaded_at)
+         VALUES ($1, NULL, $2, now())
+         ON CONFLICT (emp_id) DO UPDATE
+           SET image = NULL, uploaded_by = EXCLUDED.uploaded_by, uploaded_at = now()`,
+        [empId, req.user?.username ?? null]
+      );
+      await audit(req, "EMP_PHOTO_HIDDEN", { detail: `Hid camera photo for employee ${empId}` });
+      return ok(res, { emp_id: empId });
+    }
     const r = await query(`DELETE FROM emp_photos WHERE emp_id = $1 RETURNING emp_id`, [empId]);
     if (!r.length) return res.status(404).json({ ok: false, error: "No uploaded photo for this employee" });
     await audit(req, "EMP_PHOTO_DELETED", { detail: `Deleted uploaded photo for employee ${empId}` });
@@ -385,11 +402,14 @@ async function start() {
   // the photo-upload feature shipped (schema.sql also has it for fresh installs).
   await query(`CREATE TABLE IF NOT EXISTS emp_photos (
     emp_id      TEXT PRIMARY KEY,
-    image       BYTEA NOT NULL,
+    image       BYTEA,
     mime        TEXT NOT NULL DEFAULT 'image/jpeg',
     uploaded_by TEXT,
     uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
+  // image = NULL marks "photo hidden by admin" — relax the constraint on DBs
+  // created before that semantic existed (idempotent).
+  await query(`ALTER TABLE emp_photos ALTER COLUMN image DROP NOT NULL`);
   await seedSuperAdmin();
   await setupLive(app);
   app.listen(env.port, () => {

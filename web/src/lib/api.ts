@@ -240,8 +240,10 @@ export const api = {
     const json = await res.json();
     if (!json.ok) throw new Error(json.error ?? "Upload failed");
   },
-  deleteEmpPhoto: async (empId: string) => {
-    const json = await sendJSON(`/api/employees/${encodeURIComponent(empId)}/photo`, "DELETE");
+  // hide=true suppresses the camera-capture photo (read-only volume — the file
+  // can't be deleted, so the server stores a "hidden" marker instead).
+  deleteEmpPhoto: async (empId: string, hide = false) => {
+    const json = await sendJSON(`/api/employees/${encodeURIComponent(empId)}/photo${hide ? "?hide=1" : ""}`, "DELETE");
     if (!json.ok) throw new Error(json.error ?? "Delete failed");
   },
   changePassword: (current: string, next: string) =>

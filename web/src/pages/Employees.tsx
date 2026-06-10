@@ -169,9 +169,9 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
   const canManagePhoto = can("super_admin", "admin");
   const fileRef = useRef<HTMLInputElement>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
-  // Local override after an upload/delete (server truth is data.emp.has_photo);
-  // `ver` busts the browser cache so the new image shows immediately.
-  const [photo, setPhoto] = useState<{ has: boolean; ver: number } | null>(null);
+  // Local override after an upload/remove (server truth is data.emp). Source:
+  // "uploaded" portrait > "camera" capture > "none". `ver` busts the img cache.
+  const [photo, setPhoto] = useState<{ src: "uploaded" | "camera" | "none"; ver: number } | null>(null);
   useEffect(() => setPhoto(null), [emp?.emp_id]);
 
   // Pre-warm the heavy jsPDF chunk while the user is looking at the modal so
@@ -180,12 +180,15 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
     if (emp) void import("../lib/employeePdf");
   }, [emp]);
 
-  const hasPhoto = photo?.has ?? !!data?.emp?.has_photo;
+  // What the avatar currently shows: an admin upload, a camera capture, or nothing.
+  const photoSrc: "uploaded" | "camera" | "none" =
+    photo?.src ?? (data?.emp?.has_photo ? "uploaded" : data?.emp?.image_id ? "camera" : "none");
+  const hasPhoto = photoSrc === "uploaded";
   const avatarUrl = emp
-    ? hasPhoto
+    ? photoSrc === "uploaded"
       ? `/faces/emp/${encodeURIComponent(emp.emp_id)}?v=${photo?.ver ?? 0}`
-      : data?.emp?.image_id
-      ? `/faces/${data.emp.image_id}`
+      : photoSrc === "camera"
+      ? `/faces/${data!.emp.image_id}`
       : undefined
     : undefined;
 
@@ -194,7 +197,7 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
     setPhotoBusy(true);
     try {
       await api.uploadEmpPhoto(emp.emp_id, await downscalePhoto(file));
-      setPhoto({ has: true, ver: Date.now() });
+      setPhoto({ src: "uploaded", ver: Date.now() });
     } catch (e) {
       alert((e as Error).message || "Photo upload failed");
     } finally {
@@ -203,12 +206,22 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
     }
   };
 
+  // Uploaded photo → delete it (falls back to camera capture, if any).
+  // Camera photo → hide it (the synced file is read-only; the server stores a
+  // "hidden" marker, and the photo disappears from lists + live display too).
   const removePhoto = async () => {
-    if (!emp || !confirm("Remove this employee's uploaded photo?")) return;
+    if (!emp || photoSrc === "none") return;
+    const msg =
+      photoSrc === "uploaded"
+        ? data?.emp?.image_id
+          ? "Remove the uploaded photo? The camera capture will show again."
+          : "Remove the uploaded photo?"
+        : "Remove this camera photo? It will be hidden everywhere (lists + live display).";
+    if (!confirm(msg)) return;
     setPhotoBusy(true);
     try {
-      await api.deleteEmpPhoto(emp.emp_id);
-      setPhoto({ has: false, ver: Date.now() });
+      await api.deleteEmpPhoto(emp.emp_id, photoSrc === "camera");
+      setPhoto({ src: photoSrc === "uploaded" && data?.emp?.image_id ? "camera" : "none", ver: Date.now() });
     } catch (e) {
       alert((e as Error).message || "Could not remove the photo");
     } finally {
@@ -286,14 +299,14 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
                     disabled={photoBusy}
                     className="flex-1 rounded-lg border border-white/20 px-2 py-1.5 text-[11px] font-semibold text-white/75 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
                   >
-                    {photoBusy ? "Working…" : hasPhoto ? "Replace photo" : "Upload photo"}
+                    {photoBusy ? "Working…" : photoSrc !== "none" ? "Replace photo" : "Upload photo"}
                   </button>
-                  {hasPhoto && (
+                  {photoSrc !== "none" && (
                     <button
                       onClick={removePhoto}
                       disabled={photoBusy}
                       aria-label="Remove photo"
-                      title="Remove photo"
+                      title={photoSrc === "uploaded" ? "Remove uploaded photo" : "Hide camera photo"}
                       className="rounded-lg border border-white/20 px-2.5 py-1.5 text-[11px] font-semibold text-white/60 transition-colors hover:border-error hover:bg-error hover:text-white disabled:opacity-40"
                     >
                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -327,8 +340,15 @@ export function EmployeeModal({ emp, range, cafe, meal, onClose }: { emp: { emp_
               ))}
             </dl>
 
-            {/* Total meals lives in the ledger header ("· n punches") and the
-                export button in the ledger toolbar — the rail stays clean. */}
+            {/* Headline total — just the number; export lives in the ledger toolbar. */}
+            <div className="mt-auto hidden pt-6 sm:block">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.24em] text-white/40">
+                {meal ? `${meal} meals in period` : "Total meals in period"}
+              </div>
+              <div className="tnum mt-1.5 text-[46px] font-bold leading-none tracking-tight">
+                {data ? count(data.totalMeals) : "—"}
+              </div>
+            </div>
           </div>
         </aside>
 
